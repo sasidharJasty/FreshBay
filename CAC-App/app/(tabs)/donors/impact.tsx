@@ -1,13 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import DonorsImpact from '../../screens/donors/impact';
 
-export default function DonorsImpact() {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Impact</Text>
-      <Text style={styles.subtitle}>Community dashboard and leaderboard</Text>
-    </View>
-  );
+export default function DonorsImpactWrapper() {
+  return <DonorsImpact />;
 }
-
-const styles = StyleSheet.create({ container: { flex: 1, alignItems: 'center', justifyContent: 'center' }, title: { fontSize: 20, fontWeight: '700' }, subtitle: { color: '#666' } });

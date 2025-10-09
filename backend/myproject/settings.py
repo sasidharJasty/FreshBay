@@ -143,3 +143,13 @@ EMAIL_HOST_PASSWORD = 'nkuqihegijpcjmlk'
 EMAIL_USE_TLS = True
 EMAIL_USE_SSL = False
 DJANGO_LOG_LEVEL=DEBUG
+
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}

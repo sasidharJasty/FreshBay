@@ -1,5 +1,6 @@
-import { Tabs } from 'expo-router';
-import React from 'react';
+import { Tabs, useRouter } from 'expo-router';
+import React, { useMemo, useEffect } from 'react';
+import { View, ActivityIndicator } from 'react-native';
 import { useAuth } from '../context/auth';
 
 import { HapticTab } from '@/components/haptic-tab';
@@ -7,61 +8,88 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
+const ALL_TABS = [
+  // Families / Recipients (charity role)
+  { name: 'families/home', title: 'Home', icon: 'house.fill', roles: ['charity'] },
+  { name: 'families/available', title: 'Available Food', icon: 'cart.fill', roles: ['charity'] },
+  { name: 'families/claims', title: 'My Claims', icon: 'cube.box.fill', roles: ['charity'] },
+  { name: 'families/aid', title: 'Aid & Benefits', icon: 'heart.fill', roles: ['charity'] },
+  { name: 'families/profile', title: 'Profile', icon: 'person.crop.circle', roles: ['charity'] },
+
+  // Donors
+  { name: 'donors/home', title: 'Home', icon: 'house.fill', roles: ['donor'] },
+  { name: 'donors/donate', title: 'Donate', icon: 'camera.fill', roles: ['donor'] },
+  { name: 'donors/analytics', title: 'Analytics', icon: 'chart.bar.fill', roles: ['donor'] },
+  { name: 'donors/impact', title: 'Impact', icon: 'leaf.fill', roles: ['donor'] },
+  { name: 'donors/profile', title: 'Profile', icon: 'person.crop.circle', roles: ['donor'] },
+
+  // Volunteers
+  { name: 'volunteers/home', title: 'Routes', icon: 'map.fill', roles: ['volunteer'] },
+  { name: 'volunteers/tasks', title: 'Available Tasks', icon: 'bolt.fill', roles: ['volunteer'] },
+  { name: 'volunteers/active', title: 'Active', icon: 'car.fill', roles: ['volunteer'] },
+  { name: 'volunteers/impact', title: 'Impact', icon: 'leaf.fill', roles: ['volunteer'] },
+  { name: 'volunteers/profile', title: 'Profile', icon: 'person.crop.circle', roles: ['volunteer'] },
+];
+
 export default function TabLayout() {
   const colorScheme = useColorScheme();
   const auth: any = useAuth();
   const role = auth?.role;
+  const router = useRouter();
+
+  // wait for auth to finish loading before rendering tabs; if there's no token, navigate
+  // back to the root auth screen. When a token is present but the role hasn't hydrated yet,
+  // we simply keep the loading state instead of forcing a logout.
+  useEffect(() => {
+    if (auth?.loading) return;
+    if (!auth?.token) {
+      router.replace('/' as any);
+    }
+  }, [auth?.loading, auth?.token, router]);
+
+  const normalizedRole = useMemo(() => {
+    if (role === 'donor' || role === 'volunteer' || role === 'charity') {
+      return role;
+    }
+    return 'charity';
+  }, [role]);
+  const visibleTabs = useMemo(
+    () => ALL_TABS.filter((tab) => tab.roles.includes(normalizedRole)),
+    [normalizedRole]
+  );
+  const initialRoute = visibleTabs[0]?.name ?? 'families/home';
+
+  // render a loader while auth state is resolving to avoid flashing the wrong tabs
+  if (auth?.loading || (auth?.token && !auth?.role)) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
 
   return (
     <Tabs
+      initialRouteName={initialRoute}
       screenOptions={{
         tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,
-        tabBarButton: HapticTab,
       }}>
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="explore"
-        options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
-        }}
-      />
-      {role === 'charity' || role === 'recipient' ? (
-        <Tabs.Screen
-          name="families"
-          options={{
-            title: 'Families',
-            tabBarIcon: ({ color }) => <IconSymbol size={28} name="person.2.fill" color={color} />,
-          }}
-        />
-      ) : null}
-
-      {role === 'donor' ? (
-        <Tabs.Screen
-          name="donors"
-          options={{
-            title: 'Donors',
-            tabBarIcon: ({ color }) => <IconSymbol size={28} name="bag.fill" color={color} />,
-          }}
-        />
-      ) : null}
-
-      {role === 'volunteer' ? (
-        <Tabs.Screen
-          name="volunteers"
-          options={{
-            title: 'Volunteers',
-            tabBarIcon: ({ color }) => <IconSymbol size={28} name="car.fill" color={color} />,
-          }}
-        />
-      ) : null}
+      {ALL_TABS.map((t) => {
+        const isVisible = visibleTabs.some((vt) => vt.name === t.name);
+        return (
+          <Tabs.Screen
+            key={t.name}
+            name={t.name}
+            options={{
+              title: t.title,
+              tabBarIcon: ({ color }) => <IconSymbol size={28} name={t.icon as any} color={color} />,
+              tabBarButton: isVisible ? (props) => <HapticTab {...props} /> : undefined,
+              href: isVisible ? undefined : null,
+            }}
+          />
+        );
+      })}
     </Tabs>
   );
 }

@@ -1,13 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import VolunteersTasks from '../../screens/volunteers/tasks';
 
-export default function VolunteersTasks() {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Available Tasks</Text>
-      <Text style={styles.subtitle}>Open pickups nearby</Text>
-    </View>
-  );
+export default function VolunteersTasksWrapper() {
+  return <VolunteersTasks />;
 }
-
-const styles = StyleSheet.create({ container: { flex: 1, alignItems: 'center', justifyContent: 'center' }, title: { fontSize: 20, fontWeight: '700' }, subtitle: { color: '#666' } });
