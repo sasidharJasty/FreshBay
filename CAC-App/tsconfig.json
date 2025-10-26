@@ -1,0 +1,26 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "allowJs": true,
+    "strict": false,
+    "baseUrl": ".",
+  "module": "nodenext",
+  "moduleResolution": "nodenext",
+    "paths": {
+      "@/*": ["./*"],
+      "@components/*": ["components/*"],
+      "@assets/*": ["assets/*"],
+      "@constants/*": ["constants/*"],
+      "@scripts/*": ["scripts/*"]
+    },
+    "types": ["react", "react-native"]
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.js",
+    "**/*.jsx",
+    "types/**/*.d.ts"
+  ],
+  "exclude": ["node_modules", "metro.config.js", "babel.config.js"]
+}
