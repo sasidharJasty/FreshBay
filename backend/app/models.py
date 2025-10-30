@@ -15,8 +15,8 @@ class CustomUserManager(UserManager):
     def _create_user(self, email, password, **extra_fields):
         if not email:
             raise ValueError('The Email field must be set')
-        email = self.normalize_email(email)
-        user = self.model( email=email, **extra_fields)
+        email = (self.normalize_email(email) or '').strip().lower()
+        user = self.model(email=email, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
         return user
@@ -116,6 +116,9 @@ class Donation(TimeStampedModel):
     location_zone = models.ForeignKey('LocationZone', related_name='donations', on_delete=models.SET_NULL, null=True, blank=True)
     is_prediction = models.BooleanField(default=False)
     created_by = models.ForeignKey('User', related_name='donations_created', on_delete=models.SET_NULL, null=True, blank=True)
+    pickup_address = models.CharField(max_length=255, blank=True)
+    pickup_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    pickup_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
 
     class Meta:
         ordering = ('-available_from',)
@@ -401,3 +404,36 @@ class FoodInspection(TimeStampedModel):
 
     def __str__(self):
         return f"Food inspection #{self.pk or 'unsaved'}"
+
+class FoodInsecurityForecast(TimeStampedModel):
+    district_id = models.CharField(max_length=32)
+    state_name = models.CharField(max_length=64, blank=True, default='')
+    state_abbreviation = models.CharField(max_length=4, blank=True, default='')
+    year = models.PositiveIntegerField()
+    overall_food_insecurity_rate = models.DecimalField(max_digits=6, decimal_places=4)
+    child_food_insecurity_rate = models.DecimalField(max_digits=6, decimal_places=4, null=True, blank=True)
+    estimated_food_insecure_individuals = models.PositiveIntegerField(null=True, blank=True)
+    estimated_food_insecure_children = models.PositiveIntegerField(null=True, blank=True)
+    low_income_household_pct = models.DecimalField(max_digits=6, decimal_places=4, null=True, blank=True)
+    high_income_household_pct = models.DecimalField(max_digits=6, decimal_places=4, null=True, blank=True)
+    low_type_code = models.IntegerField(null=True, blank=True)
+    high_type_code = models.IntegerField(null=True, blank=True)
+    raw_features = models.JSONField(default=dict, blank=True)
+    centroid_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    centroid_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    location_zone = models.ForeignKey(
+        LocationZone,
+        related_name='food_insecurity_forecasts',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ('-year', 'state_abbreviation', 'district_id')
+        unique_together = (('district_id', 'year'),)
+
+    def __str__(self):
+        label = self.state_abbreviation or self.state_name or 'Unknown'
+        return f"Forecast {label} {self.district_id} ({self.year})"
+

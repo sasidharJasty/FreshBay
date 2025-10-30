@@ -14,6 +14,7 @@ from .models import (
     FoodInspection,
     VolunteerProfile,
     VolunteerTask,
+    FoodInsecurityForecast,
 )
 from .utils import normalize_role
 
@@ -77,6 +78,9 @@ class DonationSerializer(serializers.ModelSerializer):
             'remaining_pickups',
             'reserved_claims_count',
             'created_by',
+            'pickup_address',
+            'pickup_latitude',
+            'pickup_longitude',
         )
 
 
@@ -114,6 +118,9 @@ class DonationManageSerializer(serializers.ModelSerializer):
             'status',
             'location_zone',
             'is_prediction',
+            'pickup_address',
+            'pickup_latitude',
+            'pickup_longitude',
         )
         read_only_fields = ('quantity', 'is_prediction')
 
@@ -121,6 +128,18 @@ class DonationManageSerializer(serializers.ModelSerializer):
         max_pickups = attrs.get('max_pickups')
         if max_pickups is not None and max_pickups <= 0:
             raise serializers.ValidationError({'max_pickups': 'Max pickups must be at least 1.'})
+
+        lat = attrs.get('pickup_latitude', getattr(self.instance, 'pickup_latitude', None))
+        lon = attrs.get('pickup_longitude', getattr(self.instance, 'pickup_longitude', None))
+        if (lat is None) != (lon is None):
+            raise serializers.ValidationError({'pickup_latitude': 'Provide both latitude and longitude, or leave both blank.'})
+        if lat is not None:
+            if lat < -90 or lat > 90:
+                raise serializers.ValidationError({'pickup_latitude': 'Latitude must be between -90 and 90.'})
+        if lon is not None:
+            if lon < -180 or lon > 180:
+                raise serializers.ValidationError({'pickup_longitude': 'Longitude must be between -180 and 180.'})
+
         return super().validate(attrs)
 
     def create(self, validated_data):
@@ -252,6 +271,30 @@ class FoodInspectionSerializer(serializers.ModelSerializer):
             'email': user.email,
         }
 
+
+
+class FoodInsecurityForecastSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FoodInsecurityForecast
+        fields = (
+            'id',
+            'district_id',
+            'state_name',
+            'state_abbreviation',
+            'year',
+            'overall_food_insecurity_rate',
+            'child_food_insecurity_rate',
+            'estimated_food_insecure_individuals',
+            'estimated_food_insecure_children',
+            'low_income_household_pct',
+            'high_income_household_pct',
+            'low_type_code',
+            'high_type_code',
+            'raw_features',
+            'centroid_latitude',
+            'centroid_longitude',
+            'location_zone',
+        )
 
 class VolunteerProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)

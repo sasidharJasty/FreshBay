@@ -1,34 +1,43 @@
 from __future__ import annotations
 
+from collections import Counter
+import json
+import logging
 import random
-from decimal import Decimal
+import secrets
+from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from math import atan2, cos, radians, sin, sqrt
-from django.core.exceptions import ObjectDoesNotExist
-from django.core.mail import send_mail
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+from django.conf import settings
+from django.templatetags.static import static
+from django.utils.formats import date_format
+from django.views.generic import TemplateView
 from django.contrib.auth import get_user_model, login, logout
 from django.contrib.auth.models import Group
-from django.http import JsonResponse
-from datetime import datetime, timedelta
-import secrets
-
-from django.contrib.auth import get_user_model, login, logout
+from django.core.exceptions import ObjectDoesNotExist
+from django.core.mail import send_mail
 from django.db import transaction
-from django.db.models import Avg, Count, Max
+from django.db.models import Avg, Count, Max, Sum, Q
+from django.db.models.functions import TruncDate
 from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import permissions, status, viewsets
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.exceptions import NotFound
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
-from rest_framework.parsers import FormParser, MultiPartParser
 
 from .models import (
     AidProgram,
@@ -43,6 +52,7 @@ from .models import (
     VolunteerProfile,
     VolunteerTask,
     FoodInspection,
+    FoodInsecurityForecast,
 )
 from .serializers import (
     AidProgramSerializer,
@@ -61,13 +71,131 @@ from .serializers import (
     VolunteerProfileSerializer,
     VolunteerTaskSerializer,
     FoodInspectionSerializer,
+    FoodInsecurityForecastSerializer,
 )
+from .ml.seq2seq_food_insecurity import (
+    ForecastConfig,
+    dataframe_to_forecast_rows,
+    run_food_insecurity_forecast,
+)
+
 from .utils import analyze_food_image, normalize_role
+
+
+logger = logging.getLogger(__name__)
 
 
 User = get_user_model()
 EMAIL_HOST_USER = "test@example.com"
 CO2_PER_MILE = Decimal("0.404")
+
+_STATE_ABBR_TO_NAME = {
+    "AL": "Alabama",
+    "AK": "Alaska",
+    "AZ": "Arizona",
+    "AR": "Arkansas",
+    "CA": "California",
+    "CO": "Colorado",
+    "CT": "Connecticut",
+    "DE": "Delaware",
+    "DC": "District of Columbia",
+    "FL": "Florida",
+    "GA": "Georgia",
+    "HI": "Hawaii",
+    "ID": "Idaho",
+    "IL": "Illinois",
+    "IN": "Indiana",
+    "IA": "Iowa",
+    "KS": "Kansas",
+    "KY": "Kentucky",
+    "LA": "Louisiana",
+    "ME": "Maine",
+    "MD": "Maryland",
+    "MA": "Massachusetts",
+    "MI": "Michigan",
+    "MN": "Minnesota",
+    "MS": "Mississippi",
+    "MO": "Missouri",
+    "MT": "Montana",
+    "NE": "Nebraska",
+    "NV": "Nevada",
+    "NH": "New Hampshire",
+    "NJ": "New Jersey",
+    "NM": "New Mexico",
+    "NY": "New York",
+    "NC": "North Carolina",
+    "ND": "North Dakota",
+    "OH": "Ohio",
+    "OK": "Oklahoma",
+    "OR": "Oregon",
+    "PA": "Pennsylvania",
+    "RI": "Rhode Island",
+    "SC": "South Carolina",
+    "SD": "South Dakota",
+    "TN": "Tennessee",
+    "TX": "Texas",
+    "UT": "Utah",
+    "VT": "Vermont",
+    "VA": "Virginia",
+    "WA": "Washington",
+    "WV": "West Virginia",
+    "WI": "Wisconsin",
+    "WY": "Wyoming",
+    "PR": "Puerto Rico",
+}
+_STATE_NAME_TO_ABBR = {name.upper(): abbr for abbr, name in _STATE_ABBR_TO_NAME.items()}
+
+
+AGRITOURISM_FALLBACK = [
+    {
+        "id": "fallback-salinas",
+        "name": "Harvest Moon Family Farm",
+        "street": "123 Orchard Lane",
+        "city": "Salinas",
+        "state": "CA",
+        "zip": "93901",
+        "phone": "(555) 219-0044",
+        "website": "https://harvestmoonfarm.example.com",
+        "latitude": 36.6777,
+        "longitude": -121.6555,
+        "products": "U-pick berries, hayrides, seasonal dinners",
+        "season": "May - October",
+        "description": "Family-friendly agritourism hub with weekend tours and farm-to-table tastings.",
+        "distance": 12.5,
+    },
+    {
+        "id": "fallback-napa",
+        "name": "Valley View Lavender Ranch",
+        "street": "455 Lavender Ridge Rd",
+        "city": "Napa",
+        "state": "CA",
+        "zip": "94559",
+        "phone": "(555) 842-1182",
+        "website": "https://valleyviewlavender.example.com",
+        "latitude": 38.2975,
+        "longitude": -122.2869,
+        "products": "Lavender harvest walks, distillery demos, farm shop",
+        "season": "April - September",
+        "description": "Guided aroma tours with hands-on lavender harvesting and artisan workshops.",
+        "distance": 46.2,
+    },
+    {
+        "id": "fallback-yolo",
+        "name": "Riverbend Heritage Ranch",
+        "street": "89 County Road 22B",
+        "city": "Woodland",
+        "state": "CA",
+        "zip": "95776",
+        "phone": "(555) 764-3301",
+        "website": "https://riverbendheritage.example.com",
+        "latitude": 38.6785,
+        "longitude": -121.7733,
+        "products": "Historic farm stays, cider tastings, educational tours",
+        "season": "Year-round",
+        "description": "Generational ranch with overnight cabins and weekend harvest experiences.",
+        "distance": 82.4,
+    },
+]
 
 
 class IsDonor(permissions.BasePermission):
@@ -208,9 +336,876 @@ def _build_donor_route_map(donations_qs):
     }
 
 
+def _donation_spoilage_score(donation, now):
+    if getattr(donation, "is_prediction", False):
+        return None
+
+    available_from = getattr(donation, "available_from", None)
+    if available_from and available_from > now:
+        return 0
+
+    status = getattr(donation, "status", "available")
+    if status == "collected":
+        return 5
+    if status == "expired":
+        return 100
+
+    available_until = getattr(donation, "available_until", None)
+    total_window_hours = None
+    if available_from and available_until:
+        total_window_seconds = max((available_until - available_from).total_seconds(), 0)
+        if total_window_seconds > 0:
+            total_window_hours = total_window_seconds / 3600.0
+
+    risk = 0.0
+    if total_window_hours is not None:
+        remaining_seconds = (available_until - now).total_seconds()
+        if remaining_seconds <= 0:
+            return 100
+        remaining_hours = remaining_seconds / 3600.0
+        elapsed_hours = max(total_window_hours - remaining_hours, 0.0)
+        progress_ratio = min(1.0, elapsed_hours / total_window_hours)
+        risk = progress_ratio * 80.0
+        if remaining_hours <= 2:
+            risk += 15.0
+        elif remaining_hours <= 6:
+            risk += 8.0
+    else:
+        base_hours = max((now - available_from).total_seconds() / 3600.0, 0.0) if available_from else 0.0
+        risk = min(75.0, base_hours / 24.0 * 20.0)
+
+    claims_list = list(donation.claims.all())
+    active_claims = [claim for claim in claims_list if claim.status != "cancelled"]
+    collected_claims = [claim for claim in claims_list if claim.status == "collected"]
+
+    if active_claims:
+        fulfillment_ratio = len(collected_claims) / len(active_claims)
+        if fulfillment_ratio < 0.5:
+            risk += 10.0
+
+    if status == "ready":
+        risk += 5.0
+    elif status == "reserved":
+        risk += 2.0
+
+    return max(0, min(100, int(round(risk))))
+
+
+def _aggregate_spoilage_risk(donations, *, now):
+    weighted_scores: list[tuple[float, int]] = []
+    for donation in donations:
+        score = _donation_spoilage_score(donation, now)
+        if score is None:
+            continue
+        capacity = getattr(donation, "max_pickups", 1) or 1
+        weighted_scores.append((score, int(capacity)))
+
+    if not weighted_scores:
+        return 0
+
+    total_weight = sum(weight for _, weight in weighted_scores)
+    if total_weight <= 0:
+        return 0
+
+    composite = sum(score * weight for score, weight in weighted_scores) / float(total_weight)
+    return max(0, min(100, int(round(composite))))
+
+
 def _generate_verification_code(length: int = 6) -> str:
     alphabet = "0123456789"
     return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+
+
+def _build_daily_series(queryset, date_field: str, *, days: int = 14, value_field: str | None = None) -> dict[str, list]:
+    if queryset is None:
+        return {"labels": [], "values": []}
+
+    end_date = timezone.now().date()
+    start_date = end_date - timedelta(days=max(days - 1, 0))
+
+    try:
+        filtered = queryset.filter(**{f"{date_field}__date__gte": start_date})
+    except AttributeError:
+        return {"labels": [], "values": []}
+
+    aggregation = Sum(value_field) if value_field else Count("id")
+    annotated = (
+        filtered.annotate(day=TruncDate(date_field))
+        .values("day")
+        .annotate(value=aggregation)
+    )
+
+    value_map: dict[date, int | float] = {}
+    for entry in annotated:
+        day = entry.get("day")
+        if day is None:
+            continue
+        raw_value = entry.get("value") or 0
+        if value_field:
+            value_map[day] = float(raw_value)
+        else:
+            value_map[day] = int(raw_value)
+
+    labels: list[str] = []
+    values: list[int | float] = []
+    current = start_date
+    while current <= end_date:
+        labels.append(current.strftime("%m/%d"))
+        values.append(value_map.get(current, 0))
+        current += timedelta(days=1)
+
+    return {"labels": labels, "values": values}
+
+
+
+def _to_decimal(value: object) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+
+def _to_int(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(round(float(value)))
+    except (ValueError, TypeError):
+        return None
+
+
+
+def _normalize_feature_key(key: str) -> str:
+    normalized = key.strip().lower().replace("%", "pct").replace(" ", "_")
+    while "__" in normalized:
+        normalized = normalized.replace("__", "_")
+    return normalized
+
+
+
+def _district_id_to_geoid(district_id: str | int | None) -> str | None:
+    if district_id in (None, ""):
+        return None
+    digits = "".join(ch for ch in str(district_id) if ch.isdigit())
+    if not digits:
+        return None
+    digits = digits.zfill(4)
+    state_fp = digits[:2]
+    district_fp = digits[-2:]
+    if state_fp == "00":
+        return None
+    return f"{state_fp}{district_fp}"
+
+
+
+def _district_display_parts(forecast) -> tuple[str, str, str]:
+    district_id = getattr(forecast, "district_id", None)
+    district_code = str(district_id or "").zfill(4)
+    district_suffix = district_code[-2:]
+    state_label = (getattr(forecast, "state_abbreviation", None) or getattr(forecast, "state_name", None) or "").strip()
+    if state_label and district_suffix == "00":
+        display_name = f"{state_label} At-Large"
+    elif state_label and district_suffix:
+        display_name = f"{state_label}-{district_suffix}"
+    else:
+        display_name = str(district_id)
+    return display_name, state_label, district_suffix
+
+
+
+def _persist_forecast_rows(rows):
+    saved = []
+    for row in rows:
+        payload = row.get("payload") or {}
+        normalized = {_normalize_feature_key(k): v for k, v in payload.items()}
+        raw_state = str(row.get("state") or payload.get("state_name") or "").strip()
+        state_name = ""
+        state_abbrev = ""
+        if raw_state:
+            upper_state = raw_state.upper()
+            if upper_state in _STATE_ABBR_TO_NAME:
+                state_abbrev = upper_state
+                state_name = _STATE_ABBR_TO_NAME[upper_state]
+            else:
+                title_state = raw_state.title()
+                lookup = title_state.upper()
+                if lookup in _STATE_NAME_TO_ABBR:
+                    state_abbrev = _STATE_NAME_TO_ABBR[lookup]
+                    state_name = title_state
+                else:
+                    state_abbrev = upper_state[:4]
+                    state_name = title_state or upper_state
+        child_rate = payload.get("Child Food Insecurity Rate")
+        if child_rate is None:
+            child_rate = normalized.get("child_food_insecurity_rate")
+        estimated_individuals = payload.get("Estimated number  food insecure individuals")
+        if estimated_individuals is None:
+            estimated_individuals = normalized.get("estimated_number_food_insecure_individuals")
+        estimated_children = payload.get("Estimated Number Food Insecure Children")
+        if estimated_children is None:
+            estimated_children = normalized.get("estimated_number_food_insecure_children")
+        low_income_pct = payload.get("% of food insecure children in households with income at or below 185% FPL")
+        if low_income_pct is None:
+            low_income_pct = normalized.get("pct_of_food_insecure_children_in_households_with_income_at_or_below_185pct_fpl")
+        high_income_pct = payload.get("% of food insecure children in households with income above 185% FPL")
+        if high_income_pct is None:
+            high_income_pct = normalized.get("pct_of_food_insecure_children_in_households_with_income_above_185pct_fpl")
+
+        defaults = {
+            "state_name": (state_name or raw_state or "")[:64],
+            "state_abbreviation": state_abbrev[:4],
+            "overall_food_insecurity_rate": _to_decimal(row.get("overall_rate")),
+            "child_food_insecurity_rate": _to_decimal(child_rate),
+            "estimated_food_insecure_individuals": _to_int(estimated_individuals),
+            "estimated_food_insecure_children": _to_int(estimated_children),
+            "low_income_household_pct": _to_decimal(low_income_pct),
+            "high_income_household_pct": _to_decimal(high_income_pct),
+            "low_type_code": _to_int(payload.get("low_type_code") or normalized.get("low_type_code")),
+            "high_type_code": _to_int(payload.get("high_type_code") or normalized.get("high_type_code")),
+            "raw_features": payload,
+        }
+
+        centroid_lat = payload.get("centroid_latitude") or normalized.get("centroid_latitude")
+        centroid_lng = payload.get("centroid_longitude") or normalized.get("centroid_longitude")
+        defaults["centroid_latitude"] = _to_decimal(centroid_lat)
+        defaults["centroid_longitude"] = _to_decimal(centroid_lng)
+
+        obj, _ = FoodInsecurityForecast.objects.update_or_create(
+            district_id=str(row.get("district")),
+            year=int(row.get("year")),
+            defaults=defaults,
+        )
+        saved.append(obj)
+    return saved
+
+
+
+def _ensure_forecasts(cfg: ForecastConfig):
+    forecasts_qs = FoodInsecurityForecast.objects.all()
+    if forecasts_qs.exists() and not cfg.force_refresh:
+        return forecasts_qs
+
+    try:
+        predictions = run_food_insecurity_forecast(cfg)
+    except Exception:  # noqa: BLE001
+        return forecasts_qs
+
+    rows = dataframe_to_forecast_rows(predictions, cfg)
+    if rows:
+        _persist_forecast_rows(rows)
+    return FoodInsecurityForecast.objects.all()
+
+
+
+def _rate_to_color(rate: float | None, min_rate: float, max_rate: float) -> str:
+    if rate is None:
+        return "#B8C2CC"
+    span = max(max_rate - min_rate, 1e-6)
+    normalized = (rate - min_rate) / span
+    normalized = max(0.0, min(1.0, normalized))
+    start = (34, 139, 34)
+    end = (178, 34, 34)
+    r = int(round(start[0] + normalized * (end[0] - start[0])))
+    g = int(round(start[1] + normalized * (end[1] - start[1])))
+    b = int(round(start[2] + normalized * (end[2] - start[2])))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+
+def _severity_label(rate: float | None) -> str:
+    if rate is None:
+        return "unknown"
+    if rate < 0.12:
+        return "stable"
+    if rate < 0.16:
+        return "guarded"
+    if rate < 0.2:
+        return "elevated"
+    return "critical"
+
+
+
+def _build_forecast_map_payload(forecasts):
+    if not forecasts:
+        return {
+            "features": [],
+            "legend": {
+                "min_rate": None,
+                "max_rate": None,
+            },
+            "center": _compute_region_from_coords([]),
+            "choropleth": {
+                "entries": [],
+                "default_color": "#e5e7eb",
+                "type": "us_congressional_districts",
+                "source": static("app/cd118.geojson"),
+            },
+        }
+
+    rates = [float(f.overall_food_insecurity_rate) for f in forecasts if f.overall_food_insecurity_rate is not None]
+    min_rate = min(rates) if rates else 0.0
+    max_rate = max(rates) if rates else 0.0
+
+    features = []
+    choropleth_entries = []
+    for forecast in forecasts:
+        data = FoodInsecurityForecastSerializer(forecast).data
+        rate_value = (
+            float(forecast.overall_food_insecurity_rate)
+            if forecast.overall_food_insecurity_rate is not None
+            else None
+        )
+        child_rate = (
+            float(forecast.child_food_insecurity_rate)
+            if forecast.child_food_insecurity_rate is not None
+            else None
+        )
+
+        display_name, state_label, _ = _district_display_parts(forecast)
+
+        data["display_name"] = display_name
+        data["overall_food_insecurity_rate"] = round(rate_value, 4) if rate_value is not None else None
+        data["overall_food_insecurity_pct"] = round(rate_value * 100, 2) if rate_value is not None else None
+        data["child_food_insecurity_rate"] = round(child_rate, 4) if child_rate is not None else None
+        data["child_food_insecurity_pct"] = round(child_rate * 100, 2) if child_rate is not None else None
+        data["severity_color"] = _rate_to_color(rate_value, min_rate, max_rate)
+        data["severity_label"] = _severity_label(rate_value)
+        geoid = _district_id_to_geoid(forecast.district_id)
+        data["district_geoid"] = geoid
+        features.append(data)
+
+        if geoid:
+            choropleth_entries.append(
+                {
+                    "geoid": geoid,
+                    "color": data["severity_color"],
+                    "overall_pct": data["overall_food_insecurity_pct"],
+                    "overall_rate": data["overall_food_insecurity_rate"],
+                    "severity_label": data["severity_label"],
+                    "display_name": display_name,
+                }
+            )
+
+    centroids = [
+        {
+            "latitude": float(f.centroid_latitude),
+            "longitude": float(f.centroid_longitude),
+        }
+        for f in forecasts
+        if f.centroid_latitude is not None and f.centroid_longitude is not None
+    ]
+
+    if not centroids:
+        centroids = [
+            {
+                "latitude": float(z.latitude),
+                "longitude": float(z.longitude),
+            }
+            for z in LocationZone.objects.exclude(latitude__isnull=True, longitude__isnull=True)
+        ]
+
+    region = _compute_region_from_coords(centroids) if centroids else _compute_region_from_coords([])
+
+    legend = {
+        "min_rate": round(min_rate, 4) if rates else None,
+        "max_rate": round(max_rate, 4) if rates else None,
+        "labels": {
+            "stable": "Below 12%",
+            "guarded": "12% to 16%",
+            "elevated": "16% to 20%",
+            "critical": "Above 20%",
+        },
+    }
+
+    return {
+        "features": features,
+        "legend": legend,
+        "center": region,
+        "choropleth": {
+            "entries": choropleth_entries,
+            "default_color": "#e5e7eb",
+            "type": "us_congressional_districts",
+            "source": static("app/cd118.geojson"),
+        },
+    }
+
+def _format_dashboard_timestamp(value: datetime | None) -> tuple[str | None, str | None]:
+    if not value:
+        return None, None
+    localized = timezone.localtime(value)
+    display = date_format(localized, format="N j, Y, P T", use_l10n=True)
+    return display, localized.isoformat()
+
+
+def _generate_food_security_dashboard_payload(*, requested_year: int | None, force_refresh: bool) -> dict:
+    ml_dir = Path(__file__).resolve().parent / "ml"
+    cfg = ForecastConfig(
+        output_path=ml_dir / "predictions_per_district.csv",
+        checkpoint_path=ml_dir / "best_seq2seq_model.pth",
+        reuse_output=True,
+        reuse_model=True,
+        force_refresh=force_refresh,
+    )
+
+    csv_candidates = [
+        Path(settings.BASE_DIR) / "app" / "ml" / "FeedingAmericaData.xlsx",
+        ml_dir / "FeedingAmericaData.xlsx",
+        Path(settings.BASE_DIR) / "data" / "FeedingAmericaData.xlsx",
+    ]
+    for candidate in csv_candidates:
+        if candidate.exists():
+            cfg.csv_path = candidate
+            break
+
+    forecasts_qs = _ensure_forecasts(cfg)
+    available_years = list(
+        forecasts_qs.order_by("year").values_list("year", flat=True).distinct()
+    )
+
+    focus_year = requested_year if requested_year in available_years else (available_years[-1] if available_years else None)
+
+    if focus_year is not None:
+        forecasts_for_year = list(
+            forecasts_qs.filter(year=focus_year)
+            .select_related("location_zone")
+            .order_by("-overall_food_insecurity_rate")
+        )
+    else:
+        forecasts_for_year = []
+
+    map_payload = _build_forecast_map_payload(forecasts_for_year)
+
+    hotspots = []
+    for forecast in forecasts_for_year:
+        rate_value = (
+            float(forecast.overall_food_insecurity_rate)
+            if forecast.overall_food_insecurity_rate is not None
+            else None
+        )
+        display_name, state_label, _ = _district_display_parts(forecast)
+
+        hotspots.append(
+            {
+                "district_id": forecast.district_id,
+                "display_name": display_name,
+                "state": state_label,
+                "overall_rate": round(rate_value, 4) if rate_value is not None else None,
+                "overall_pct": round(rate_value * 100, 2) if rate_value is not None else None,
+                "severity": _severity_label(rate_value),
+                "estimated_food_insecure_individuals": forecast.estimated_food_insecure_individuals,
+                "estimated_food_insecure_children": forecast.estimated_food_insecure_children,
+                "location_zone_id": forecast.location_zone_id,
+            }
+        )
+
+    hotspots = hotspots[:8]
+
+    raw_metrics = _build_dashboard_metrics()
+    metrics = dict(raw_metrics)
+    time_series = metrics.pop("time_series", {})
+    volunteer_map = metrics.pop("volunteer_map", {})
+    updated_at = forecasts_qs.aggregate(last_updated=Max("updated_at")).get("last_updated")
+    updated_display, updated_iso = _format_dashboard_timestamp(updated_at)
+
+    summary = None
+    if forecasts_for_year:
+        highest = forecasts_for_year[0]
+        highest_rate = (
+            float(highest.overall_food_insecurity_rate)
+            if highest.overall_food_insecurity_rate is not None
+            else None
+        )
+        if highest_rate is not None:
+            highest_label, _, _ = _district_display_parts(highest)
+            summary_parts = [
+                (
+                    f"{highest_label} shows the highest projected rate at {highest_rate * 100:.1f}% in {focus_year}."
+                )
+            ]
+
+            lowest = next(
+                (
+                    forecast
+                    for forecast in reversed(forecasts_for_year)
+                    if forecast.overall_food_insecurity_rate is not None
+                ),
+                None,
+            )
+            if lowest and lowest is not highest:
+                lowest_rate = float(lowest.overall_food_insecurity_rate)
+                lowest_label, _, _ = _district_display_parts(lowest)
+                summary_parts.append(
+                    (
+                        f"{lowest_label} is lowest at {lowest_rate * 100:.1f}%."
+                    )
+                )
+
+            all_rates = [
+                float(f.overall_food_insecurity_rate)
+                for f in forecasts_for_year
+                if f.overall_food_insecurity_rate is not None
+            ]
+            if all_rates:
+                average_rate = sum(all_rates) / len(all_rates)
+                summary_parts.append(
+                    f"Average projected rate across tracked districts sits at {average_rate * 100:.1f}%."
+                )
+
+            summary = " ".join(summary_parts)
+
+    return {
+        "map": map_payload,
+        "metrics": metrics,
+        "time_series": time_series,
+        "volunteer_map": volunteer_map,
+        "hotspots": hotspots,
+        "available_years": available_years,
+        "focus_year": focus_year,
+        "summary": summary,
+        "updated_at": updated_at,
+        "updated_at_display": updated_display,
+        "updated_at_iso": updated_iso,
+        "refreshed": bool(force_refresh),
+    }
+
+
+def _build_volunteer_activity_map(limit: int = 40) -> dict[str, object]:
+    tasks_qs = (
+        VolunteerTask.objects.filter(
+            pickup_latitude__isnull=False,
+            pickup_longitude__isnull=False,
+            dropoff_latitude__isnull=False,
+            dropoff_longitude__isnull=False,
+        )
+        .select_related("volunteer")
+        .order_by('-scheduled_start', '-created_at', '-id')
+    )
+    tasks = list(tasks_qs[:limit])
+
+    features: list[dict[str, object]] = []
+    stops: list[dict[str, object]] = []
+    routes: list[list[list[float]]] = []
+    coords: list[dict[str, float]] = []
+    status_counts: dict[str, int] = {}
+    volunteer_ids: set[int] = set()
+    latest_updated: datetime | None = None
+
+    for task in tasks:
+        pickup = None
+        dropoff = None
+        if task.pickup_latitude is not None and task.pickup_longitude is not None:
+            pickup = {
+                'latitude': float(task.pickup_latitude),
+                'longitude': float(task.pickup_longitude),
+                'address': task.pickup_address,
+            }
+            coords.append({'latitude': pickup['latitude'], 'longitude': pickup['longitude']})
+            stops.append({
+                'role': 'pickup',
+                'title': task.title,
+                'status': task.status,
+                'latitude': pickup['latitude'],
+                'longitude': pickup['longitude'],
+            })
+        if task.dropoff_latitude is not None and task.dropoff_longitude is not None:
+            dropoff = {
+                'latitude': float(task.dropoff_latitude),
+                'longitude': float(task.dropoff_longitude),
+                'address': task.dropoff_address,
+            }
+            coords.append({'latitude': dropoff['latitude'], 'longitude': dropoff['longitude']})
+            stops.append({
+                'role': 'dropoff',
+                'title': task.title,
+                'status': task.status,
+                'latitude': dropoff['latitude'],
+                'longitude': dropoff['longitude'],
+            })
+
+        if not (pickup and dropoff):
+            continue
+
+        volunteer = task.volunteer
+        volunteer_name = None
+        volunteer_email = None
+        if volunteer:
+            volunteer_name = (volunteer.get_full_name() or '').strip() or volunteer.email
+            volunteer_email = volunteer.email
+            volunteer_ids.add(volunteer.id)
+
+        features.append(
+            {
+                'id': task.id,
+                'title': task.title,
+                'status': task.status,
+                'urgency': task.urgency,
+                'load_size': task.load_size,
+                'distance_miles': float(task.distance_miles or 0),
+                'estimated_minutes': int(task.estimated_minutes or 0),
+                'pickup': pickup,
+                'dropoff': dropoff,
+                'volunteer': {
+                    'name': volunteer_name,
+                    'email': volunteer_email,
+                } if volunteer else None,
+            }
+        )
+
+        routes.append(
+            [
+                [pickup['longitude'], pickup['latitude']],
+                [dropoff['longitude'], dropoff['latitude']],
+            ]
+        )
+        status_counts[task.status] = status_counts.get(task.status, 0) + 1
+        if latest_updated is None or (task.updated_at and task.updated_at > latest_updated):
+            latest_updated = task.updated_at
+
+    region = _compute_region_from_coords(coords) if coords else _compute_region_from_coords([])
+    summary = {
+        'total_routes': len(features),
+        'active_volunteers': len(volunteer_ids),
+        'by_status': status_counts,
+        'updated_at': latest_updated.isoformat() if latest_updated else None,
+    }
+
+    return {
+        'features': features,
+        'stops': stops,
+        'polyline': routes,
+        'center': region,
+        'summary': summary,
+    }
+
+
+
+
+
+def _build_dashboard_metrics():
+    now = timezone.now()
+    user_data = {
+        "total": User.objects.count(),
+        "by_role": {
+            entry["role"] or "unspecified": entry["count"]
+            for entry in User.objects.values("role").annotate(count=Count("id")).order_by("role")
+        },
+        "new_last_7_days": User.objects.filter(date_joined__gte=now - timedelta(days=7)).count(),
+    }
+
+    donations_qs = Donation.objects.select_related("location_zone", "created_by")
+    donations_status = {
+        entry["status"]: entry["count"]
+        for entry in donations_qs.values("status").annotate(count=Count("id"))
+    }
+    live_quantity = donations_qs.filter(is_prediction=False).aggregate(total=Sum("quantity"))
+
+    inventory_by_category = [
+        {
+            "category": entry["category"] or "unspecified",
+            "total_quantity": int(entry["total_qty"] or 0),
+            "donations": int(entry["count"] or 0),
+        }
+        for entry in donations_qs.values("category").annotate(
+            total_qty=Sum("quantity"),
+            count=Count("id"),
+        ).order_by("-total_qty")
+    ]
+
+    zone_breakdown = [
+        {
+            "zone": entry["location_zone__name"],
+            "level": entry["location_zone__level"],
+            "donations": int(entry["count"] or 0),
+            "quantity": int(entry["total_qty"] or 0),
+        }
+        for entry in donations_qs.filter(location_zone__isnull=False)
+        .values("location_zone__name", "location_zone__level")
+        .annotate(total_qty=Sum("quantity"), count=Count("id"))
+        .order_by("-total_qty")[:8]
+    ]
+
+    claims_qs = Claim.objects.select_related("donation", "user")
+    claims_status = {
+        entry["status"]: entry["count"]
+        for entry in claims_qs.values("status").annotate(count=Count("id"))
+    }
+    collected_count = claims_status.get("collected", 0)
+    in_flight = claims_status.get("reserved", 0) + claims_status.get("ready", 0)
+    active_pipeline = in_flight + collected_count
+    claim_conversion = {
+        "collected": collected_count,
+        "in_flight": in_flight,
+        "cancelled": claims_status.get("cancelled", 0),
+        "fulfillment_rate": round((collected_count / active_pipeline) * 100, 1) if active_pipeline else 0.0,
+    }
+
+    volunteer_tasks_qs = VolunteerTask.objects.select_related("volunteer")
+    volunteer_tasks = {
+        entry["status"]: entry["count"]
+        for entry in volunteer_tasks_qs.values("status").annotate(count=Count("id"))
+    }
+
+    volunteer_totals = (
+        volunteer_tasks_qs.exclude(volunteer__isnull=True)
+        .values("volunteer__id", "volunteer__first_name", "volunteer__last_name", "volunteer__email")
+        .annotate(
+            assigned=Count("id"),
+            completed=Count("id", filter=Q(status="completed")),
+            en_route=Count("id", filter=Q(status__in=["en_route", "delivering"])),
+            total_distance=Sum("distance_miles"),
+        )
+        .order_by("-completed", "-assigned")[:5]
+    )
+
+    volunteer_leaderboard = []
+    for entry in volunteer_totals:
+        distance_value = entry.get("total_distance") or Decimal("0")
+        volunteer_leaderboard.append(
+            {
+                "name": (
+                    f"{entry.get('volunteer__first_name') or ''} {entry.get('volunteer__last_name') or ''}"
+                ).strip() or entry.get("volunteer__email"),
+                "email": entry.get("volunteer__email"),
+                "assigned": int(entry.get("assigned") or 0),
+                "completed": int(entry.get("completed") or 0),
+                "in_route": int(entry.get("en_route") or 0),
+                "distance_miles": float(distance_value),
+            }
+        )
+
+    donor_totals = (
+        donations_qs.exclude(created_by__isnull=True)
+        .values("created_by__id", "created_by__first_name", "created_by__last_name", "created_by__email")
+        .annotate(
+            donations=Count("id"),
+            live=Count("id", filter=Q(status__in=["available", "ready", "reserved"])),
+            quantity=Sum("quantity"),
+        )
+        .order_by("-quantity", "-donations")[:5]
+    )
+
+    donor_leaderboard = []
+    for entry in donor_totals:
+        donor_name = (
+            f"{entry.get('created_by__first_name') or ''} {entry.get('created_by__last_name') or ''}"
+        ).strip() or entry.get("created_by__email")
+        donor_leaderboard.append(
+            {
+                "name": donor_name,
+                "email": entry.get("created_by__email"),
+                "donations": int(entry.get("donations") or 0),
+                "live": int(entry.get("live") or 0),
+                "quantity": int(entry.get("quantity") or 0),
+            }
+        )
+
+    inspection_status = {
+        entry["status"]: entry["count"]
+        for entry in FoodInspection.objects.values("status").annotate(count=Count("id"))
+    }
+    inspections_recent = [
+        {
+            "status": inspection.status,
+            "created": _format_dashboard_timestamp(inspection.created_at)[0],
+            "summary": (inspection.analysis or {}).get("summary", "Awaiting analysis"),
+        }
+        for inspection in FoodInspection.objects.order_by("-created_at")[:5]
+    ]
+
+    notifications_qs = Notification.objects.select_related("user")
+    notifications_total = notifications_qs.count()
+    notifications_upcoming = notifications_qs.filter(scheduled_for__gte=now).count()
+    notifications_recent = [
+        {
+            "message": note.message,
+            "type": note.notification_type,
+            "scheduled_for": _format_dashboard_timestamp(note.scheduled_for)[0],
+            "user": note.user.get_full_name() or note.user.email,
+        }
+        for note in notifications_qs.order_by("-scheduled_for")[:5]
+    ]
+
+    aid_programs_recent = [
+        {
+            "name": program.name,
+            "summary": program.summary,
+            "tags": program.tags or [],
+        }
+        for program in AidProgram.objects.order_by("-updated_at", "-created_at")[:5]
+    ]
+
+    aid_recommendation_count = AidRecommendation.objects.count()
+
+    time_series = {
+        "donations_created": _build_daily_series(donations_qs, "created_at", days=14),
+        "donation_quantity": _build_daily_series(donations_qs, "created_at", days=14, value_field="quantity"),
+        "claims_reserved": _build_daily_series(claims_qs, "reserved_at", days=14),
+        "tasks_completed": _build_daily_series(
+            volunteer_tasks_qs.filter(status="completed"),
+            "completed_at",
+            days=14,
+        ),
+        "inspections": _build_daily_series(FoodInspection.objects.all(), "created_at", days=14),
+    }
+
+    volunteer_map = _build_volunteer_activity_map()
+
+    return {
+        "users": user_data,
+        "donations": {
+            "total": donations_qs.count(),
+            "predicted": donations_qs.filter(is_prediction=True).count(),
+            "live": donations_qs.filter(is_prediction=False).count(),
+            "by_status": donations_status,
+            "live_quantity": int(live_quantity.get("total") or 0),
+            "inventory_by_category": inventory_by_category,
+            "zones": zone_breakdown,
+        },
+        "families": {
+            "profiles": FamilyProfile.objects.count(),
+            "claims_active": Claim.objects.exclude(status="cancelled").count(),
+        },
+        "volunteers": {
+            "profiles": VolunteerProfile.objects.count(),
+            "tasks": volunteer_tasks,
+            "leaderboard": volunteer_leaderboard,
+        },
+        "claims": {
+            "total": claims_qs.count(),
+            "by_status": claims_status,
+            "conversion": claim_conversion,
+        },
+        "aid": {
+            "programs": AidProgram.objects.count(),
+            "recommendations": aid_recommendation_count,
+            "recent_programs": aid_programs_recent,
+        },
+        "inspections": {
+            "total": FoodInspection.objects.count(),
+            "by_status": inspection_status,
+            "recent": inspections_recent,
+        },
+        "notifications": {
+            "total": notifications_total,
+            "upcoming": notifications_upcoming,
+            "recent": notifications_recent,
+        },
+        "leaderboards": {
+            "donors": donor_leaderboard,
+            "volunteers": volunteer_leaderboard,
+        },
+        "inventory": {
+            "categories": inventory_by_category,
+            "zones": zone_breakdown,
+        },
+        "time_series": time_series,
+        "volunteer_map": volunteer_map,
+    }
 
 
 def _get_or_create_donor_profile(user):
@@ -314,17 +1309,25 @@ class SignupView(APIView):
     http_method_names = ["post"]
 
     def post(self, request, *args, **kwargs):
+        raw_email = (request.data.get("email") or "").strip()
         password = request.data.get("password")
-        email = request.data.get("email")
-        role = normalize_role(request.data.get("role"))
+        role_raw = request.data.get("role")
+        role = normalize_role(role_raw)
 
-        if not (email and password):
+        if not (raw_email and password):
             return Response({"error": "Email and password are required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        if User.objects.filter(email=email).exists():
-            return Response({"error": " email already taken"}, status=status.HTTP_400_BAD_REQUEST)
+        normalized_email = (User.objects.normalize_email(raw_email) or "").strip()
+        email = normalized_email.lower()
 
-        user = User.objects.create_user(email=email, password=password, role=role)
+        if User.objects.filter(email__iexact=email).exists():
+            return Response({"error": "Email already taken"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if role_raw is not None and role is None:
+            return Response({"error": "Role not recognized"}, status=status.HTTP_400_BAD_REQUEST)
+
+        resolved_role = role or "charity"
+        user = User.objects.create_user(email=email, password=password, role=resolved_role)
         normalized_role = normalize_role(user.role)
         if user.role != normalized_role:
             user.role = normalized_role
@@ -338,15 +1341,16 @@ class LoginView(APIView):
     authentication_classes = []
 
     def post(self, request, *args, **kwargs):
-        email = request.data.get("email")
+        raw_email = (request.data.get("email") or "").strip()
         password = request.data.get("password")
 
-        if not (email and password):
+        if not (raw_email and password):
             return Response({"error": "email and password are required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            user = User.objects.get(email=email)
-        except User.DoesNotExist:
+        email = (User.objects.normalize_email(raw_email) or "").lower()
+
+        user = User.objects.filter(email__iexact=email).first()
+        if not user:
             return Response({"error": "Invalid email or password"}, status=status.HTTP_401_UNAUTHORIZED)
 
         if not user.check_password(password):
@@ -584,73 +1588,6 @@ class FamiliesReserveView(APIView):
                     donation.status = "reserved"
                 elif donation.status not in ["ready", "available"]:
                     donation.status = "reserved"
-            def _ensure_sample_volunteer_tasks():
-                if VolunteerTask.objects.exists():
-                    return
-
-                sample_tasks = [
-                    {
-                        "title": "Downtown bakery pickup",
-                        "summary": "Collect bread trays and deliver to Tenderloin pantry",
-                        "urgency": "high",
-                        "load_size": "medium",
-                        "distance": Decimal("6.4"),
-                        "minutes": 28,
-                        "pickup": "Sunrise Bakery, 1024 Mission St",
-                        "pickup_lat": Decimal("37.781"),
-                        "pickup_lng": Decimal("-122.410"),
-                        "dropoff": "Tenderloin Community Pantry, 201 Turk St",
-                        "drop_lat": Decimal("37.782"),
-                        "drop_lng": Decimal("-122.414"),
-                    },
-                    {
-                        "title": "Farmers market donation",
-                        "summary": "Boxed produce headed to Bayview families",
-                        "urgency": "medium",
-                        "load_size": "large",
-                        "distance": Decimal("11.2"),
-                        "minutes": 36,
-                        "pickup": "Ferry Plaza Farmers Market",
-                        "pickup_lat": Decimal("37.795"),
-                        "pickup_lng": Decimal("-122.394"),
-                        "dropoff": "Bayview Family Hub, 1550 Evans Ave",
-                        "drop_lat": Decimal("37.742"),
-                        "drop_lng": Decimal("-122.387"),
-                    },
-                    {
-                        "title": "Prepared meals sprint",
-                        "summary": "Urgent hot meal delivery to SOMA shelter",
-                        "urgency": "critical",
-                        "load_size": "small",
-                        "distance": Decimal("3.8"),
-                        "minutes": 16,
-                        "pickup": "Harvest Kitchen, 455 6th St",
-                        "pickup_lat": Decimal("37.776"),
-                        "pickup_lng": Decimal("-122.404"),
-                        "dropoff": "SOMA Safe Haven, 100 10th St",
-                        "drop_lat": Decimal("37.777"),
-                        "drop_lng": Decimal("-122.414"),
-                    },
-                ]
-
-                for order, task in enumerate(sample_tasks, start=1):
-                    VolunteerTask.objects.create(
-                        title=task["title"],
-                        summary=task["summary"],
-                        urgency=task["urgency"],
-                        load_size=task["load_size"],
-                        distance_miles=task["distance"],
-                        estimated_minutes=task["minutes"],
-                        pickup_address=task["pickup"],
-                        pickup_latitude=task["pickup_lat"],
-                        pickup_longitude=task["pickup_lng"],
-                        dropoff_address=task["dropoff"],
-                        dropoff_latitude=task["drop_lat"],
-                        dropoff_longitude=task["drop_lng"],
-                        efficiency_score=Decimal("88.0") - Decimal(order),
-                        route_sequence=order,
-                    )
-
                 donation.save(update_fields=["quantity", "status", "updated_at"])
 
         except Donation.DoesNotExist:
@@ -705,6 +1642,147 @@ class FamiliesAidView(APIView):
                 "support": support,
             }
         )
+
+
+class FamiliesAgritourismSearchView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+    backoff_until: datetime | None = None
+
+    def get(self, request, *args, **kwargs):
+        query_params = self._build_query_params(request)
+        source = "usda"
+        fallback_records = AGRITOURISM_FALLBACK
+        records = []
+
+        if self._should_attempt_remote():
+            try:
+                payload = self._fetch_external_results(query_params)
+                records = self._extract_records(payload)
+                if records:
+                    self._clear_backoff()
+                else:
+                    source = "fallback-empty"
+                    records = fallback_records
+            except Exception as exc:  # pragma: no cover - defensive network handling
+                logger.warning("Agritourism lookup failed (%s). Using fallback data.", exc)
+                self._begin_backoff()
+                source = "fallback-error"
+                records = fallback_records
+        else:
+            source = "fallback-backoff"
+            records = fallback_records
+
+        return Response(
+            {
+                "results": records,
+                "source": source,
+                "count": len(records),
+                "fallback_results": fallback_records,
+                "backoff_seconds": self._backoff_seconds_remaining(),
+            }
+        )
+
+    def _build_query_params(self, request) -> dict[str, str]:
+        params: dict[str, str] = {"program": "agritourism", "size": "50"}
+
+        city = (request.query_params.get("city") or "").strip()
+        if city:
+            params["city"] = city
+
+        state = (request.query_params.get("state") or "").strip().upper()
+        if state:
+            params["state"] = state[:2]
+
+        keywords = (request.query_params.get("keywords") or request.query_params.get("q") or "").strip()
+        if keywords:
+            params["q"] = keywords
+
+        radius = request.query_params.get("radius")
+        if radius is not None:
+            try:
+                radius_value = int(float(radius))
+                radius_value = max(1, min(radius_value, 200))
+                params["radius"] = str(radius_value)
+            except (TypeError, ValueError):
+                pass
+
+        latitude = request.query_params.get("latitude")
+        if latitude:
+            try:
+                params["latitude"] = f"{float(latitude):.4f}"
+            except (TypeError, ValueError):
+                pass
+
+        longitude = request.query_params.get("longitude")
+        if longitude:
+            try:
+                params["longitude"] = f"{float(longitude):.4f}"
+            except (TypeError, ValueError):
+                pass
+
+        return params
+
+    def _fetch_external_results(self, params: dict[str, str]):
+        endpoint = getattr(
+            settings,
+            "USDA_AGRITOURISM_ENDPOINT",
+            "https://api.ams.usda.gov/services/v1/search",
+        )
+        query_string = urlencode(params)
+        url = f"{endpoint}?{query_string}" if query_string else endpoint
+        request = Request(
+            url,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "FreshValley/1.0 (+https://freshvalley.local)",
+            },
+        )
+
+        try:
+            with urlopen(request, timeout=12) as response:
+                charset = response.headers.get_content_charset("utf-8")
+                payload = response.read().decode(charset)
+        except (HTTPError, URLError) as exc:
+            raise RuntimeError(f"USDA agritourism lookup failed: {exc}") from exc
+
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("USDA agritourism response was not valid JSON") from exc
+
+    def _extract_records(self, payload):
+        if isinstance(payload, dict):
+            for key in ("results", "data", "items"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    return value
+        if isinstance(payload, list):
+            return payload
+        return []
+
+    def _should_attempt_remote(self) -> bool:
+        endpoint = getattr(settings, "USDA_AGRITOURISM_ENDPOINT", "")
+        if not endpoint:
+            return False
+        until = self.__class__.backoff_until
+        if until and until > timezone.now():
+            return False
+        return True
+
+    def _begin_backoff(self):
+        minutes = max(int(getattr(settings, "AGRITOURISM_BACKOFF_MINUTES", 15)), 1)
+        self.__class__.backoff_until = timezone.now() + timedelta(minutes=minutes)
+
+    def _clear_backoff(self):
+        self.__class__.backoff_until = None
+
+    def _backoff_seconds_remaining(self) -> int:
+        until = self.__class__.backoff_until
+        if not until:
+            return 0
+        seconds = int((until - timezone.now()).total_seconds())
+        return max(seconds, 0)
 
 
 class FamiliesProfileView(APIView):
@@ -937,6 +2015,217 @@ class DonorTeamMemberDetailView(APIView):
         member.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+"""
+class FoodSecurityDashboardView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [TokenAuthentication]
+
+    def get(self, request, *args, **kwargs):
+        refresh_raw = (request.query_params.get("refresh") or "").strip().lower()
+        force_refresh = refresh_raw in {"1", "true", "yes", "y", "refresh"}
+
+        year_param = request.query_params.get("year")
+        focus_year: int | None = None
+        if year_param:
+            try:
+                focus_year = int(year_param)
+            except (TypeError, ValueError):
+                focus_year = None
+
+        ml_dir = Path(__file__).resolve().parent / "ml"
+        cfg = ForecastConfig(
+            output_path=ml_dir / "predictions_per_district.csv",
+            checkpoint_path=ml_dir / "best_seq2seq_model.pth",
+            reuse_output=True,
+            reuse_model=True,
+            force_refresh=force_refresh,
+        )
+
+        csv_candidates = [
+            Path(settings.BASE_DIR) / "app" / "ml" / "FeedingAmericaData.xlsx",
+            ml_dir / "FeedingAmericaData.xlsx",
+            Path(settings.BASE_DIR) / "data" / "FeedingAmericaData.xlsx",
+        ]
+        for candidate in csv_candidates:
+            if candidate.exists():
+                cfg.csv_path = candidate
+                break
+
+        forecasts_qs = _ensure_forecasts(cfg)
+        available_years = list(
+            forecasts_qs.order_by("year").values_list("year", flat=True).distinct()
+        )
+
+        if focus_year not in available_years:
+            focus_year = available_years[-1] if available_years else None
+
+        if focus_year is not None:
+            forecasts_for_year = list(
+                forecasts_qs.filter(year=focus_year)
+                .select_related("location_zone")
+                .order_by("-overall_food_insecurity_rate")
+            )
+        else:
+            forecasts_for_year = []
+
+        map_payload = _build_forecast_map_payload(forecasts_for_year)
+
+        hotspots = []
+        for forecast in forecasts_for_year:
+            rate_value = (
+                float(forecast.overall_food_insecurity_rate)
+                if forecast.overall_food_insecurity_rate is not None
+                else None
+            )
+            hotspots.append(
+                {
+                    "district_id": forecast.district_id,
+                    "state": forecast.state_abbreviation or forecast.state_name,
+                    "overall_rate": round(rate_value, 4) if rate_value is not None else None,
+                    "overall_pct": round(rate_value * 100, 2) if rate_value is not None else None,
+                    "severity": _severity_label(rate_value),
+                    "estimated_food_insecure_individuals": forecast.estimated_food_insecure_individuals,
+                    "estimated_food_insecure_children": forecast.estimated_food_insecure_children,
+                    "location_zone_id": forecast.location_zone_id,
+                }
+            )
+
+        hotspots = hotspots[:8]
+
+        metrics = _build_dashboard_metrics()
+        updated_at = forecasts_qs.aggregate(last_updated=Max("updated_at")).get("last_updated")
+
+        summary = None
+        if forecasts_for_year:
+            highest = forecasts_for_year[0]
+            highest_rate = (
+                float(highest.overall_food_insecurity_rate)
+                if highest.overall_food_insecurity_rate is not None
+                else None
+            )
+            if highest_rate is not None:
+                summary_parts = [
+                    (
+                        f"{highest.district_id} ({highest.state_abbreviation or highest.state_name}) "
+                        f"shows the highest projected rate at {highest_rate * 100:.1f}% in {focus_year}."
+                    )
+                ]
+
+                lowest = next(
+                    (
+                        forecast
+                        for forecast in reversed(forecasts_for_year)
+                        if forecast.overall_food_insecurity_rate is not None
+                    ),
+                    None,
+                )
+                if lowest and lowest is not highest:
+                    lowest_rate = float(lowest.overall_food_insecurity_rate)
+                    summary_parts.append(
+                        (
+                            f"{lowest.district_id} ({lowest.state_abbreviation or lowest.state_name}) "
+                            f"is lowest at {lowest_rate * 100:.1f}%."
+                        )
+                    )
+
+                all_rates = [
+                    float(f.overall_food_insecurity_rate)
+                    for f in forecasts_for_year
+                    if f.overall_food_insecurity_rate is not None
+                ]
+                if all_rates:
+                    average_rate = sum(all_rates) / len(all_rates)
+                    summary_parts.append(
+                        f"Average projected rate across tracked districts sits at {average_rate * 100:.1f}%."
+                    )
+
+                summary = " ".join(summary_parts)
+
+        payload = {
+            "map": map_payload,
+            "metrics": metrics,
+            "hotspots": hotspots,
+            "available_years": available_years,
+            "focus_year": focus_year,
+            "summary": summary,
+            "updated_at": updated_at,
+            "refreshed": bool(force_refresh),
+        }
+
+        return Response(payload)
+"""
+def _bump_dashboard_years(payload, *, bump: int = 2):
+    if not isinstance(payload, dict):
+        return payload
+    years = payload.get("available_years")
+    if isinstance(years, list):
+        payload["available_years"] = [
+            year + bump if isinstance(year, int) else year for year in years
+        ]
+    focus_year = payload.get("focus_year")
+    if isinstance(focus_year, int):
+        payload["focus_year"] = focus_year + bump
+    return payload
+
+
+class FoodSecurityDashboardView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [TokenAuthentication]
+
+    def get(self, request, *args, **kwargs):
+        refresh_raw = (request.query_params.get("refresh") or "").strip().lower()
+        force_refresh = refresh_raw in {"1", "true", "yes", "y", "refresh"}
+
+        requested_year: int | None = None
+        year_param = request.query_params.get("year")
+        if year_param:
+            try:
+                requested_year = int(year_param)
+            except (TypeError, ValueError):
+                requested_year = None
+
+        payload = _generate_food_security_dashboard_payload(
+            requested_year=requested_year,
+            force_refresh=force_refresh,
+        )
+        _bump_dashboard_years(payload)
+        return Response(payload)
+
+
+class FoodSecurityDashboardPageView(TemplateView):
+    template_name = "app/food_security_dashboard.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        refresh_raw = (self.request.GET.get("refresh") or "").strip().lower()
+        force_refresh = refresh_raw in {"1", "true", "yes", "y", "refresh"}
+
+        requested_year: int | None = None
+        year_param = self.request.GET.get("year")
+        if year_param:
+            try:
+                requested_year = int(year_param)
+            except (TypeError, ValueError):
+                requested_year = None
+
+        payload = _generate_food_security_dashboard_payload(
+            requested_year=requested_year,
+            force_refresh=force_refresh,
+        )
+        _bump_dashboard_years(payload)
+        map_payload = payload.get("map") or {}
+
+        context.update(
+            dashboard=payload,
+            map_payload=map_payload,
+            legend=map_payload.get("legend", {}),
+            hotspots=payload.get("hotspots") or [],
+            available_years=payload.get("available_years") or [],
+            focus_year=payload.get("focus_year"),
+            volunteer_map=payload.get("volunteer_map") or {},
+            mapbox_token=getattr(settings, "MAPBOX_ACCESS_TOKEN", ""),
+        )
+        return context
 
 class DonorDashboardView(APIView):
     permission_classes = [IsAuthenticated, IsDonor]
@@ -1044,8 +2333,10 @@ class DonorDonationsView(APIView):
     def post(self, request, *args, **kwargs):
         user = request.user
         payload = request.data.copy()
-        if not payload.get("donor_name"):
-            payload["donor_name"] = user.get_full_name() or user.email
+        donor_name = (payload.get("donor_name") or "").strip()
+        if not donor_name:
+            donor_name = (user.get_full_name() or "").strip() or user.email
+        payload["donor_name"] = donor_name
         serializer = DonationManageSerializer(data=payload)
         serializer.is_valid(raise_exception=True)
         donation = serializer.save(created_by=user, is_prediction=False)
@@ -1121,57 +2412,138 @@ class DonorAnalyticsView(APIView):
 
     def get(self, request, *args, **kwargs):
         user = request.user
-        claims = Claim.objects.filter(donation__created_by=user)
-        donations = Donation.objects.filter(created_by=user)
+        now = timezone.now()
+        claims_qs = Claim.objects.filter(donation__created_by=user)
+        claims_data = list(claims_qs.values("status", "reserved_at", "collected_at"))
 
-        weekly_data = []
-        for weeks_back in range(0, 6):
-            start = timezone.now().date() - timedelta(weeks=weeks_back + 1)
-            end = timezone.now().date() - timedelta(weeks=weeks_back)
-            window_claims = claims.filter(
-                reserved_at__date__gt=start, reserved_at__date__lte=end
-            )
-            weekly_data.append(
+        donations_qs = (
+            Donation.objects.filter(created_by=user)
+            .select_related("location_zone")
+            .prefetch_related("claims")
+        )
+        donation_list = list(donations_qs)
+
+        def _as_local_date(value):
+            if not value:
+                return None
+            if timezone.is_aware(value):
+                return timezone.localtime(value).date()
+            return value.date()
+
+        weekly_trends = []
+        today = now.date()
+        current_week_start = today - timedelta(days=today.weekday())
+        for offset in range(5, -1, -1):
+            week_start = current_week_start - timedelta(weeks=offset)
+            week_end = week_start + timedelta(days=6)
+            reservations_count = 0
+            collected_count_week = 0
+            for claim in claims_data:
+                reserved_dt = claim.get("reserved_at")
+                reserved_date = _as_local_date(reserved_dt)
+                if reserved_date and week_start <= reserved_date <= week_end:
+                    reservations_count += 1
+                if claim.get("status") == "collected":
+                    collected_dt = claim.get("collected_at")
+                    collected_date = _as_local_date(collected_dt)
+                    if collected_date and week_start <= collected_date <= week_end:
+                        collected_count_week += 1
+            weekly_trends.append(
                 {
-                    "label": f"Week {weeks_back + 1}",
-                    "reservations": window_claims.count(),
-                    "collected": window_claims.filter(status="collected").count(),
+                    "label": week_start.strftime("%b %d"),
+                    "reservations": reservations_count,
+                    "collected": collected_count_week,
                 }
             )
 
-        category_mix = donations.values("category").annotate(total=Count("id")).order_by("-total")
+        category_label_map = dict(Donation.CATEGORY_CHOICES)
+        category_counter = Counter(
+            donation.category
+            for donation in donation_list
+            if donation.category and not getattr(donation, "is_prediction", False)
+        )
+        category_mix = [
+            {"category": category_label_map.get(code, code), "count": count}
+            for code, count in category_counter.most_common()
+        ]
 
-        spoilage_risk = max(
-            0,
-            min(
-                100,
-                100
-                - int(
-                    donations.filter(status="collected").count()
-                    / (donations.count() or 1)
-                    * 100
-                ),
-            ),
+        spoilage_risk = _aggregate_spoilage_risk(donation_list, now=now)
+
+        total_claims = len(claims_data)
+        collected_count = sum(1 for claim in claims_data if claim.get("status") == "collected")
+        fulfillment_pct = (collected_count / total_claims * 100) if total_claims else None
+
+        recent_cutoff = now - timedelta(days=14)
+        recent_cancellations = sum(
+            1
+            for claim in claims_data
+            if claim.get("status") == "cancelled"
+            and claim.get("reserved_at")
+            and claim["reserved_at"] >= recent_cutoff
         )
 
-        tips = [
-            "Your dairy donations often go unused after 2 days. Consider earlier drop-offs.",
-            "Offer smaller pickup windows for prepared meals to keep freshness high.",
-            "Schedule volunteers in advance for Friday evening surges.",
-        ]
+        open_slots = 0
+        for donation in donation_list:
+            if donation.status not in {"available", "ready"}:
+                continue
+            claims_for_donation = list(donation.claims.all())
+            active_claims = [claim for claim in claims_for_donation if claim.status != "cancelled"]
+            remaining = max((donation.max_pickups or 0) - len(active_claims), 0)
+            open_slots += remaining
+
+        tips: list[str] = []
+        if fulfillment_pct is None:
+            tips.append("Publish your first donation to unlock engagement insights and fulfillment tracking.")
+        else:
+            if fulfillment_pct < 70:
+                tips.append(
+                    f"Only {fulfillment_pct:.0f}% of reservations are collected. Tighten pickup windows or send reminder messages before pickup times."
+                )
+            elif fulfillment_pct > 90:
+                tips.append(
+                    "Over 90% of your reservations are collected — keep coordinating with couriers to maintain that pace."
+                )
+
+        if recent_cancellations:
+            tips.append(
+                f"{recent_cancellations} reservation{'s' if recent_cancellations != 1 else ''} were cancelled in the last 14 days. Confirm timing with families to reduce no-shows."
+            )
+
+        if open_slots > 0 and collected_count:
+            tips.append(
+                f"You still have {open_slots} pickup slot{'s' if open_slots != 1 else ''} open. Highlight those opportunities in your next notification."
+            )
+
+        if donation_list:
+            if spoilage_risk >= 70:
+                tips.append(
+                    "Spoilage risk is high — prioritize upcoming pickups or shorten the availability window for items at risk."
+                )
+            elif spoilage_risk <= 25 and collected_count:
+                tips.append("Spoilage risk is low — your donations are getting claimed well before they expire.")
+
+        if len(weekly_trends) >= 2:
+            recent_week = weekly_trends[-1]["reservations"]
+            previous_week = weekly_trends[-2]["reservations"]
+            if previous_week and recent_week < previous_week:
+                tips.append(
+                    "Reservations dipped week over week. Try posting earlier in the day or narrowing donation windows."
+                )
+            elif recent_week > previous_week:
+                tips.append("Reservation volume rose this week — keep the same cadence of postings to sustain momentum.")
+
+        if not tips:
+            if donation_list:
+                tips.append("Keep tracking pickup confirmations — your data looks healthy across the last six weeks.")
+            else:
+                tips.append("Start a donation to populate analytics for pickup trends, spoilage risk, and category mix.")
+
+        tips = tips[:3]
 
         return Response(
             {
-                "weekly_trends": list(reversed(weekly_data)),
-                "category_mix": [
-                    {
-                        "category": dict(Donation.CATEGORY_CHOICES).get(
-                            item["category"], item["category"]
-                        ),
-                        "count": item["total"],
-                    }
-                    for item in category_mix
-                ],
+                "weekly_trends": weekly_trends,
+                "category_mix": category_mix,
                 "spoilage_risk_score": spoilage_risk,
                 "ai_tips": tips,
             }
@@ -1184,16 +2556,82 @@ class DonorImpactView(APIView):
 
     def get(self, request, *args, **kwargs):
         user = request.user
+        now = timezone.now()
         claims = Claim.objects.filter(donation__created_by=user)
-        total_meals = claims.filter(status="collected").count() * 4
+        collected_claims = claims.filter(status="collected")
+        total_meals = collected_claims.count() * 4
+
+        period_start = now - timedelta(days=7)
+        leaderboard_period = "this week"
+        leaderboard_rows = list(
+            Claim.objects.filter(
+                status="collected",
+                donation__created_by__isnull=False,
+                reserved_at__gte=period_start,
+            )
+            .values("donation__created_by")
+            .annotate(total_claims=Count("id"), last_collected=Max("collected_at"))
+            .order_by("-total_claims", "-last_collected", "donation__created_by")
+        )
+
+        if not leaderboard_rows:
+            leaderboard_rows = list(
+                Claim.objects.filter(status="collected", donation__created_by__isnull=False)
+                .values("donation__created_by")
+                .annotate(total_claims=Count("id"), last_collected=Max("collected_at"))
+                .order_by("-total_claims", "-last_collected", "donation__created_by")
+            )
+            leaderboard_period = "all time"
+
+        aggregated = [entry for entry in leaderboard_rows if entry.get("donation__created_by")]
+        donor_ids = [entry["donation__created_by"] for entry in aggregated]
+        donor_map = {u.id: u for u in User.objects.filter(id__in=donor_ids)}
+
+        leaderboard_full = []
+        for index, entry in enumerate(aggregated, start=1):
+            donor_id = entry["donation__created_by"]
+            donor_user = donor_map.get(donor_id)
+            if not donor_user:
+                continue
+            leaderboard_full.append(
+                {
+                    "rank": index,
+                    "name": donor_user.get_full_name() or donor_user.email,
+                    "meals": entry["total_claims"] * 4,
+                    "user_id": donor_id,
+                }
+            )
+
+        display_board = leaderboard_full[:5]
+        user_ids_in_board = {item["user_id"] for item in display_board}
+        if user.id not in user_ids_in_board:
+            user_entry = next((item for item in leaderboard_full if item["user_id"] == user.id), None)
+            if user_entry:
+                display_board.append(user_entry)
+            else:
+                next_rank = leaderboard_full[-1]["rank"] + 1 if leaderboard_full else 1
+                display_board.append(
+                    {
+                        "rank": next_rank,
+                        "name": user.get_full_name() or user.email,
+                        "meals": total_meals,
+                        "user_id": user.id,
+                    }
+                )
+
+        if not display_board:
+            display_board = [
+                {
+                    "rank": 1,
+                    "name": user.get_full_name() or user.email,
+                    "meals": total_meals,
+                    "user_id": user.id,
+                }
+            ]
+
         leaderboards = [
-            {"rank": 1, "name": "Harborview Grocers", "meals": 820},
-            {"rank": 2, "name": "Sunrise Farms", "meals": 760},
-            {
-                "rank": 3,
-                "name": user.get_full_name() or user.email,
-                "meals": max(total_meals, 120),
-            },
+            {"rank": item["rank"], "name": item["name"], "meals": item["meals"]}
+            for item in display_board
         ]
 
         impact_tree = {
@@ -1209,15 +2647,18 @@ class DonorImpactView(APIView):
             "current": total_meals,
         }
 
+        cancellations_last_week = claims.filter(
+            status="cancelled", reserved_at__gte=timezone.now() - timedelta(days=7)
+        ).count()
         badges = [
             {"label": "First 100 Meals", "earned": total_meals >= 100},
             {
                 "label": "Zero Waste Week",
-                "earned": claims.filter(status="cancelled").count() == 0,
+                "earned": cancellations_last_week == 0 and claims.exists(),
             },
             {
                 "label": "Freshness Hero",
-                "earned": claims.filter(status="collected").count() >= 20,
+                "earned": collected_claims.count() >= 20,
             },
         ]
 
@@ -1226,6 +2667,7 @@ class DonorImpactView(APIView):
                 "leaderboard": leaderboards,
                 "impact_tree": impact_tree,
                 "badges": badges,
+                "leaderboard_period": leaderboard_period,
             }
         )
 
@@ -1277,8 +2719,6 @@ class VolunteerRoutesView(APIView):
     def get(self, request, *args, **kwargs):
         user = request.user
         profile = _get_or_create_volunteer_profile(user)
-
-        _ensure_sample_volunteer_tasks()
 
         active_tasks = list(
             VolunteerTask.objects.filter(volunteer=user)
@@ -1369,8 +2809,6 @@ class VolunteerAvailableTasksView(APIView):
     authentication_classes = [TokenAuthentication]
 
     def get(self, request, *args, **kwargs):
-        _ensure_sample_volunteer_tasks()
-
         qs = VolunteerTask.objects.filter(status="open").order_by("urgency", "distance_miles")
 
         max_distance = request.query_params.get("max_distance")

@@ -57,6 +57,10 @@ export type MapboxPolyline = {
 
 export type MapboxRegion = Region;
 
+export type MapboxRegionChangeInfo = {
+  isUserInteraction: boolean;
+};
+
 export type MapboxMapHandle = {
   fitToCoordinates: (coordinates: LatLng[], options?: { edgePadding?: EdgePadding; animated?: boolean; duration?: number }) => void;
   animateToRegion: (region: Region, durationMs?: number) => void;
@@ -70,6 +74,7 @@ type MapboxMapProps = {
   onMapReady?: () => void;
   onMarkerPress?: (markerId: string) => void;
   onMapPress?: (coordinate: LatLng) => void;
+  onRegionDidChange?: (region: Region, info: MapboxRegionChangeInfo) => void;
   accessToken?: string;
   mapStyleURL?: string;
   testID?: string;
@@ -88,7 +93,8 @@ type CommandMessage =
 type BridgeMessage =
   | { type: 'ready' }
   | { type: 'marker-press'; id: string }
-  | { type: 'map-press'; coordinate: LatLng };
+  | { type: 'map-press'; coordinate: LatLng }
+  | { type: 'region-change'; region: Region; info?: { isUserInteraction?: boolean } };
 
 const DEFAULT_REGION: Region = {
   latitude: 37.7749,
@@ -167,6 +173,7 @@ const MapboxNative = forwardRef<MapboxMapHandle, MapboxMapProps>((props, ref) =>
     onMapReady,
     onMarkerPress,
     onMapPress,
+    onRegionDidChange,
     accessToken,
     mapStyleURL,
     testID,
@@ -239,6 +246,13 @@ const MapboxNative = forwardRef<MapboxMapHandle, MapboxMapProps>((props, ref) =>
         }
         if (data.type === 'map-press') {
           onMapPress?.(data.coordinate);
+          return;
+        }
+        if (data.type === 'region-change') {
+          const info: MapboxRegionChangeInfo = {
+            isUserInteraction: Boolean(data.info?.isUserInteraction),
+          };
+          onRegionDidChange?.(data.region, info);
         }
       } catch (error) {
         if (__DEV__) {
@@ -246,7 +260,7 @@ const MapboxNative = forwardRef<MapboxMapHandle, MapboxMapProps>((props, ref) =>
         }
       }
     },
-    [enqueue, flush, onMapPress, onMapReady, onMarkerPress],
+    [enqueue, flush, onMapPress, onMapReady, onMarkerPress, onRegionDidChange],
   );
 
   useImperativeHandle(
@@ -286,7 +300,7 @@ const MapboxNative = forwardRef<MapboxMapHandle, MapboxMapProps>((props, ref) =>
       javaScriptEnabled
       domStorageEnabled
       setSupportMultipleWindows={false}
-      androidHardwareAccelerationDisabled={false}
+      {...({ androidHardwareAccelerationDisabled: false } as any)}
       automaticallyAdjustContentInsets={false}
       scrollEnabled={false}
       testID={testID}
@@ -304,6 +318,7 @@ const MapboxWeb = forwardRef<MapboxMapHandle, MapboxMapProps>((props, ref) => {
     onMapReady,
     onMarkerPress,
     onMapPress,
+    onRegionDidChange,
     accessToken,
     mapStyleURL,
     testID,
@@ -333,7 +348,7 @@ const MapboxWeb = forwardRef<MapboxMapHandle, MapboxMapProps>((props, ref) => {
         link.setAttribute('data-mapbox-gl-css', 'true');
         document.head.appendChild(link);
       }
-      mapboxgl.accessToken = token;
+  (mapboxgl as any).accessToken = token;
       const camera = regionToCamera(initialRegion);
       const map = new mapboxgl.Map({
         container: containerRef.current as HTMLDivElement,
@@ -468,6 +483,37 @@ const MapboxWeb = forwardRef<MapboxMapHandle, MapboxMapProps>((props, ref) => {
     nextPolylineIds.forEach((id) => polylineIdsRef.current.add(id));
   }, [markers, onMarkerPress, polylines, ready]);
 
+  useEffect(() => {
+    if (!ready || !mapRef.current) {
+      return;
+    }
+    const map = mapRef.current;
+    const handler = (event: any) => {
+      if (!onRegionDidChange) {
+        return;
+      }
+      const bounds = map.getBounds();
+      const center = map.getCenter();
+      const latitudeDelta = Math.max(Math.abs(bounds.getNorth() - bounds.getSouth()), 0.0005);
+      const longitudeDelta = Math.max(Math.abs(bounds.getEast() - bounds.getWest()), 0.0005);
+      const region: Region = {
+        latitude: center.lat,
+        longitude: center.lng,
+        latitudeDelta,
+        longitudeDelta,
+      };
+      const info: MapboxRegionChangeInfo = {
+        isUserInteraction: Boolean(event?.originalEvent),
+      };
+      onRegionDidChange(region, info);
+    };
+    map.on('moveend', handler as any);
+    handler(null);
+    return () => {
+      map.off('moveend', handler as any);
+    };
+  }, [onRegionDidChange, ready]);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -583,6 +629,19 @@ function buildHtml({ token, camera, styleURL }: { token: string; camera: { cente
     const bottom = padding.bottom || 0;
     const left = padding.left || 0;
     return { top, right, bottom, left };
+  }
+
+  function computeRegion(map) {
+    var center = map.getCenter();
+    var bounds = map.getBounds();
+    var latitudeDelta = Math.max(Math.abs(bounds.getNorth() - bounds.getSouth()), 0.0005);
+    var longitudeDelta = Math.max(Math.abs(bounds.getEast() - bounds.getWest()), 0.0005);
+    return {
+      latitude: center.lat,
+      longitude: center.lng,
+      latitudeDelta: latitudeDelta,
+      longitudeDelta: longitudeDelta,
+    };
   }
 
   function applyMarkers(markers) {
@@ -717,8 +776,17 @@ function buildHtml({ token, camera, styleURL }: { token: string; camera: { cente
     send({ type: 'map-press', coordinate: { latitude: event.lngLat.lat, longitude: event.lngLat.lng } });
   });
 
+  map.on('moveend', function(event) {
+    send({
+      type: 'region-change',
+      region: computeRegion(map),
+      info: { isUserInteraction: Boolean(event && event.originalEvent) },
+    });
+  });
+
   map.on('load', function() {
     send({ type: 'ready' });
+    send({ type: 'region-change', region: computeRegion(map), info: { isUserInteraction: false } });
   });
 
   document.addEventListener('message', handleMessage);

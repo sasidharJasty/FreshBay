@@ -1,5 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, FlatList, ActivityIndicator } from 'react-native';
+import {
+  ActivityIndicator,
+  FlatList,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { getFamiliesDashboard } from '@/app/api';
@@ -428,6 +436,7 @@ const createStyles = (palette: Palette, mode: 'light' | 'dark') => {
     soonEta: { fontSize: 13, color: PRIMARY, fontWeight: '600' },
   });
 };
+
 
 function formatDistance(distance: number | string | null | undefined) {
   if (distance === null || distance === undefined) return 'Distance N/A';

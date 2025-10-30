@@ -19,12 +19,24 @@ urlpatterns = [
     path("me/", views.MeView.as_view(), name="me"),
     path("food-inspections/", views.FoodInspectionView.as_view(), name="food-inspections"),
     path("food-inspections/<int:pk>/", views.FoodInspectionDetailView.as_view(), name="food-inspections-detail"),
+    # Dashboards
+    path("dashboards/food-security/", views.FoodSecurityDashboardView.as_view(), name="dashboards-food-security"),
+    path(
+        "dashboards/food-security/page/",
+        views.FoodSecurityDashboardPageView.as_view(),
+        name="dashboards-food-security-page",
+    ),
     # Families / recipients
     path("families/dashboard/", views.FamiliesDashboardView.as_view(), name="families-dashboard"),
     path("families/available/", views.FamiliesAvailableView.as_view(), name="families-available"),
     path("families/reserve/", views.FamiliesReserveView.as_view(), name="families-reserve"),
     path("families/claims/", views.FamiliesClaimsView.as_view(), name="families-claims"),
     path("families/aid/", views.FamiliesAidView.as_view(), name="families-aid"),
+    path(
+        "families/agritourism/search/",
+        views.FamiliesAgritourismSearchView.as_view(),
+        name="families-agritourism-search",
+    ),
     path("families/profile/", views.FamiliesProfileView.as_view(), name="families-profile"),
     # Donor endpoints
     path("donors/profile/", views.DonorProfileView.as_view(), name="donors-profile"),

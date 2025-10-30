@@ -16,6 +16,12 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+import os
+
+MAPBOX_ACCESS_TOKEN = os.getenv("MAPBOX_ACCESS_TOKEN", "pk.eyJ1Ijoic2phc3R5IiwiYSI6ImNtNWs0emR0YTFhamcyam9mOTB3aWNkNm4ifQ.WJLPRwbxZDB6fTdhIXZmAA")
+USDA_AGRITOURISM_ENDPOINT = os.getenv("USDA_AGRITOURISM_ENDPOINT", "https://api.ams.usda.gov/services/v1/search")
+AGRITOURISM_BACKOFF_MINUTES = int(os.getenv("AGRITOURISM_BACKOFF_MINUTES", "15"))
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
@@ -123,6 +129,9 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

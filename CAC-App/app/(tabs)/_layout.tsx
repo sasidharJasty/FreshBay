@@ -14,6 +14,7 @@ const ALL_TABS = [
   { name: 'families/available', title: 'Available Food', icon: 'cart.fill', roles: ['charity'] },
   { name: 'families/claims', title: 'My Claims', icon: 'cube.box.fill', roles: ['charity'] },
   { name: 'families/aid', title: 'Aid & Benefits', icon: 'heart.fill', roles: ['charity'] },
+  { name: 'families/agritourism', title: 'Agritourism', icon: 'leaf.fill', roles: ['charity'] },
   { name: 'families/profile', title: 'Profile', icon: 'person.crop.circle', roles: ['charity'] },
 
   // Donors

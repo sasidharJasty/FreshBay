@@ -51,6 +51,9 @@ type DonationLike = {
   available_from?: string;
   quantity?: number;
   status_display?: string;
+  pickup_address?: string | null;
+  pickup_latitude?: number | string | null;
+  pickup_longitude?: number | string | null;
   zone?: ZoneLike | null;
 };
 
@@ -89,8 +92,8 @@ export function FoodMap({ donations = [], zones = [], height = 260, onSelectDona
   const donationMarkers = useMemo<MapPoint[]>(() => {
     return donations
       .map((donation) => {
-        const latitude = toNumber(donation?.zone?.latitude);
-        const longitude = toNumber(donation?.zone?.longitude);
+        const latitude = toNumber(donation?.pickup_latitude ?? donation?.zone?.latitude);
+        const longitude = toNumber(donation?.pickup_longitude ?? donation?.zone?.longitude);
         if (latitude === null || longitude === null) return null;
         return {
           key: `donation-${donation.id}`,
@@ -192,8 +195,8 @@ export function FoodMap({ donations = [], zones = [], height = 260, onSelectDona
 
   useEffect(() => {
     if (!selected || !mapReady || !mapRef.current) return;
-    const latitude = toNumber(selected.zone?.latitude);
-    const longitude = toNumber(selected.zone?.longitude);
+    const latitude = toNumber(selected.pickup_latitude ?? selected.zone?.latitude);
+    const longitude = toNumber(selected.pickup_longitude ?? selected.zone?.longitude);
     if (latitude === null || longitude === null) return;
     mapRef.current.animateToRegion?.(
       {

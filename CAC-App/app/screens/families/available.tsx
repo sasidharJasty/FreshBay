@@ -32,6 +32,9 @@ type InventoryDonation = {
   available_until?: string;
   status_display?: string;
   category?: string;
+  pickup_address?: string | null;
+  pickup_latitude?: number | string | null;
+  pickup_longitude?: number | string | null;
   zone?: {
     latitude?: number | string | null;
     longitude?: number | string | null;

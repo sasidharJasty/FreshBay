@@ -1,9 +1,10 @@
 import Constants from 'expo-constants';
 import { NativeModules, Platform } from 'react-native';
+import type { ComponentType } from 'react';
 
-type MapViewComponent = typeof import('react-native-maps').default;
-type MapMarkerComponent = typeof import('react-native-maps').Marker;
-type MapPolylineComponent = typeof import('react-native-maps').Polyline;
+type MapViewComponent = ComponentType<Record<string, unknown>>;
+type MapMarkerComponent = ComponentType<Record<string, unknown>>;
+type MapPolylineComponent = ComponentType<Record<string, unknown>>;
 
 type MapComponents = {
   MapView?: MapViewComponent;

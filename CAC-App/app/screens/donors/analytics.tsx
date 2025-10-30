@@ -117,8 +117,14 @@ export default function DonorsAnalytics() {
     );
   }
 
-  const maxReservations = data ? Math.max(...data.weekly_trends.map((w) => w.reservations), 1) : 1;
-  const categoryTotal = data ? data.category_mix.reduce((sum, c) => sum + c.count, 0) || 1 : 1;
+  const weeklyTrends = data?.weekly_trends ?? [];
+  const categoryMix = data?.category_mix ?? [];
+  const aiTips = data?.ai_tips ?? [];
+  const hasTrends = weeklyTrends.length > 0;
+  const hasCategoryMix = categoryMix.length > 0;
+  const hasTips = aiTips.length > 0;
+  const maxReservations = hasTrends ? Math.max(...weeklyTrends.map((w) => w.reservations), 1) : 1;
+  const categoryTotal = hasCategoryMix ? categoryMix.reduce((sum, c) => sum + c.count, 0) || 1 : 1;
 
   return (
     <ScrollView
@@ -134,22 +140,28 @@ export default function DonorsAnalytics() {
           <Text style={[styles.sectionTitle, { color: palette.text }]}>Weekly reservations</Text>
           <Ionicons name="pulse" size={18} color={palette.tint} />
         </View>
-        <View style={styles.chartRow}>
-          {data?.weekly_trends.map((item) => {
-            const heightRatio = item.reservations / maxReservations;
-            const collectedRatio = item.collected / maxReservations;
-            return (
-              <View key={item.label} style={styles.chartColumn}>
-                <View style={styles.barFrame}>
-                  <View style={[styles.barReservations, { height: Math.max(8, heightRatio * 120), backgroundColor: palette.tint }]} />
-                  <View style={[styles.barCollected, { height: Math.max(4, collectedRatio * 120), backgroundColor: 'rgba(16,185,129,0.8)' }]} />
-                </View>
-                <Text style={[styles.chartLabel, { color: palette.secondaryText }]}>{item.label}</Text>
-              </View>
-            );
-          })}
-        </View>
-        <Text style={[styles.helper, { color: palette.secondaryText }]}>Purple bars show total reservations; green overlays show confirmed pickups.</Text>
+        {hasTrends ? (
+          <>
+            <View style={styles.chartRow}>
+              {weeklyTrends.map((item) => {
+                const heightRatio = item.reservations / maxReservations;
+                const collectedRatio = item.collected / maxReservations;
+                return (
+                  <View key={item.label} style={styles.chartColumn}>
+                    <View style={styles.barFrame}>
+                      <View style={[styles.barReservations, { height: Math.max(8, heightRatio * 120), backgroundColor: palette.tint }]} />
+                      <View style={[styles.barCollected, { height: Math.max(4, collectedRatio * 120), backgroundColor: 'rgba(16,185,129,0.8)' }]} />
+                    </View>
+                    <Text style={[styles.chartLabel, { color: palette.secondaryText }]}>{item.label}</Text>
+                  </View>
+                );
+              })}
+            </View>
+            <Text style={[styles.helper, { color: palette.secondaryText }]}>Purple bars show total reservations; green overlays show confirmed pickups.</Text>
+          </>
+        ) : (
+          <Text style={[styles.helper, { color: palette.secondaryText }]}>Post a donation to start tracking weekly reservation trends.</Text>
+        )}
       </View>
 
       <View style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}> 
@@ -157,18 +169,22 @@ export default function DonorsAnalytics() {
           <Text style={[styles.sectionTitle, { color: palette.text }]}>Category mix</Text>
           <Ionicons name="pie-chart" size={18} color={palette.tint} />
         </View>
-        {data?.category_mix.map((item) => {
-          const pct = Math.round((item.count / categoryTotal) * 100);
-          return (
-            <View key={item.category} style={styles.mixRow}>
-              <Text style={[styles.mixLabel, { color: palette.text }]}>{item.category}</Text>
-              <View style={[styles.mixBar, { backgroundColor: palette.border }]}> 
-                <View style={[styles.mixFill, { width: `${pct}%`, backgroundColor: palette.tint }]} />
+        {hasCategoryMix ? (
+          categoryMix.map((item) => {
+            const pct = Math.round((item.count / categoryTotal) * 100);
+            return (
+              <View key={item.category} style={styles.mixRow}>
+                <Text style={[styles.mixLabel, { color: palette.text }]}>{item.category}</Text>
+                <View style={[styles.mixBar, { backgroundColor: palette.border }]}> 
+                  <View style={[styles.mixFill, { width: `${pct}%`, backgroundColor: palette.tint }]} />
+                </View>
+                <Text style={[styles.mixValue, { color: palette.secondaryText }]}>{pct}%</Text>
               </View>
-              <Text style={[styles.mixValue, { color: palette.secondaryText }]}>{pct}%</Text>
-            </View>
-          );
-        })}
+            );
+          })
+        ) : (
+          <Text style={[styles.helper, { color: palette.secondaryText }]}>No category insights yet — add more donations to build this breakdown.</Text>
+        )}
       </View>
 
       <View style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}> 
@@ -187,12 +203,16 @@ export default function DonorsAnalytics() {
           <Text style={[styles.sectionTitle, { color: palette.text }]}>AI tips</Text>
           <Ionicons name="bulb" size={18} color={palette.tint} />
         </View>
-        {data?.ai_tips.map((tip, idx) => (
-          <View key={idx} style={styles.tipRow}>
-            <View style={[styles.tipBullet, { backgroundColor: palette.tint }]} />
-            <Text style={[styles.tipText, { color: palette.text }]}>{tip}</Text>
-          </View>
-        ))}
+        {hasTips ? (
+          aiTips.map((tip, idx) => (
+            <View key={`${tip}-${idx}`} style={styles.tipRow}>
+              <View style={[styles.tipBullet, { backgroundColor: palette.tint }]} />
+              <Text style={[styles.tipText, { color: palette.text }]}>{tip}</Text>
+            </View>
+          ))
+        ) : (
+          <Text style={[styles.helper, { color: palette.secondaryText }]}>Once reservations start coming in, we’ll surface suggestions tailored to your pickup patterns.</Text>
+        )}
       </View>
     </ScrollView>
   );

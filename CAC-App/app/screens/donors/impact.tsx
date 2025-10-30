@@ -22,6 +22,7 @@ type ImpactData = {
   leaderboard: LeaderboardEntry[];
   impact_tree: ImpactTree;
   badges: { label: string; earned: boolean }[];
+  leaderboard_period?: string;
 };
 
 type Palette = {
@@ -69,10 +70,19 @@ export default function DonorsImpact() {
     loadImpact();
   }, [loadImpact]);
 
+  const leaderboard = impact?.leaderboard ?? [];
   const tiers = impact?.impact_tree?.tiers ?? [];
+  const badges = impact?.badges ?? [];
   const currentMeals = impact?.impact_tree?.current ?? 0;
   const maxTier = tiers[tiers.length - 1]?.threshold ?? 1;
   const tierProgress = Math.min(1, maxTier ? currentMeals / maxTier : 0);
+  const hasLeaderboard = leaderboard.length > 0;
+  const hasTiers = tiers.length > 0;
+  const hasBadges = badges.length > 0;
+  const leaderboardPeriod = impact?.leaderboard_period ?? 'this week';
+  const leaderboardDescription = leaderboardPeriod === 'all time'
+    ? 'See how you compare across the FreshBay network over all time.'
+    : `See how you compare across the FreshBay network ${leaderboardPeriod}.`;
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -85,7 +95,6 @@ export default function DonorsImpact() {
           <Text style={styles.title}>Your impact</Text>
           <Text style={[styles.subtitle, { color: palette.secondaryText }]}>Celebrate meals shared and see how close you are to the next milestone.</Text>
         </View>
-
         {loading ? (
           <View style={styles.loader}>
             <ActivityIndicator color={palette.tint} size="large" />
@@ -94,20 +103,25 @@ export default function DonorsImpact() {
           <>
             <View style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}> 
               <Text style={styles.cardTitle}>Leaderboard</Text>
-              <Text style={[styles.helper, { color: palette.secondaryText }]}>See how you compare across the FreshBay network this week.</Text>
-              <View style={styles.leaderboard}>
-                {impact?.leaderboard?.map((entry) => (
-                  <View
-                    key={entry.rank}
-                    style={[styles.leaderRow, { borderColor: palette.border }]}>
-                    <Text style={[styles.rank, { color: palette.tint }]}>{entry.rank}</Text>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.leaderName, { color: palette.text }]}>{entry.name}</Text>
-                      <Text style={[styles.leaderMeta, { color: palette.secondaryText }]}>{entry.meals.toLocaleString()} meals donated</Text>
+              <Text style={[styles.helper, { color: palette.secondaryText }]}>{leaderboardDescription}</Text>
+              {hasLeaderboard ? (
+                <View style={styles.leaderboard}>
+                  {leaderboard.map((entry) => (
+                    <View
+                      key={entry.rank}
+                      style={[styles.leaderRow, { borderColor: palette.border }]}
+                    >
+                      <Text style={[styles.rank, { color: palette.tint }]}>{entry.rank}</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.leaderName, { color: palette.text }]}>{entry.name}</Text>
+                        <Text style={[styles.leaderMeta, { color: palette.secondaryText }]}>{entry.meals.toLocaleString()} meals donated</Text>
+                      </View>
                     </View>
-                  </View>
-                ))}
-              </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={[styles.helper, { color: palette.secondaryText }]}>Get your first donation scheduled to appear on the community leaderboard.</Text>
+              )}
             </View>
 
             <View style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}> 
@@ -121,40 +135,50 @@ export default function DonorsImpact() {
                   }]}
                 />
               </View>
-              <View style={styles.tierRow}>
-                {tiers.map((tier) => (
-                  <View key={tier.name} style={styles.tierColumn}>
-                    <View
-                      style={[styles.tierDot, {
-                        backgroundColor: tier.achieved ? palette.tint : palette.border,
-                      }]}
-                    />
-                    <Text style={[styles.tierName, { color: palette.text }]}>{tier.name}</Text>
-                    <Text style={[styles.tierThreshold, { color: palette.secondaryText }]}>{tier.threshold} meals</Text>
+              {hasTiers ? (
+                <View style={styles.tierContent}>
+                  <View style={styles.tierRow}>
+                    {tiers.map((tier) => (
+                      <View key={tier.name} style={styles.tierColumn}>
+                        <View
+                          style={[styles.tierDot, {
+                            backgroundColor: tier.achieved ? palette.tint : palette.border,
+                          }]}
+                        />
+                        <Text style={[styles.tierName, { color: palette.text }]}>{tier.name}</Text>
+                        <Text style={[styles.tierThreshold, { color: palette.secondaryText }]}>{tier.threshold} meals</Text>
+                      </View>
+                    ))}
                   </View>
-                ))}
-              </View>
-              <Text style={[styles.currentMeals, { color: palette.text }]}>Current: {currentMeals.toLocaleString()} meals</Text>
+                  <Text style={[styles.currentMeals, { color: palette.text }]}>Current: {currentMeals.toLocaleString()} meals</Text>
+                </View>
+              ) : (
+                <Text style={[styles.helper, { color: palette.secondaryText }]}>Tier progress kicks in once donations start flowing in.</Text>
+              )}
             </View>
 
             <View style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}> 
               <Text style={styles.cardTitle}>Badges</Text>
               <Text style={[styles.helper, { color: palette.secondaryText }]}>Aim for a perfect streak to unlock them all.</Text>
-              <View style={styles.badgeRow}>
-                {impact?.badges?.map((badge) => (
-                  <View
-                    key={badge.label}
-                    style={[styles.badge, {
-                      backgroundColor: badge.earned ? palette.tint : 'transparent',
-                      borderColor: badge.earned ? palette.tint : palette.border,
-                    }]}
-                  >
-                    <Text style={[styles.badgeText, { color: badge.earned ? '#fff' : palette.secondaryText }]}>
-                      {badge.label}
-                    </Text>
-                  </View>
-                ))}
-              </View>
+              {hasBadges ? (
+                <View style={styles.badgeRow}>
+                  {badges.map((badge) => (
+                    <View
+                      key={badge.label}
+                      style={[styles.badge, {
+                        backgroundColor: badge.earned ? palette.tint : 'transparent',
+                        borderColor: badge.earned ? palette.tint : palette.border,
+                      }]}
+                    >
+                      <Text style={[styles.badgeText, { color: badge.earned ? '#fff' : palette.secondaryText }]}>
+                        {badge.label}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={[styles.helper, { color: palette.secondaryText }]}>Keep fulfilling pickups to start collecting achievement badges.</Text>
+              )}
             </View>
           </>
         )}
@@ -247,6 +271,9 @@ const createStyles = (palette: Palette) =>
     progressFill: {
       height: '100%',
       borderRadius: 999,
+    },
+    tierContent: {
+      gap: 12,
     },
     tierRow: {
       flexDirection: 'row',

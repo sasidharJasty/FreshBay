@@ -1,0 +1,1018 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Food Security Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    {% if mapbox_token %}
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+    {% endif %}
+        <style>
+        :root {
+            color-scheme: light dark;
+            --bg: #f5f6fa;
+            --fg: #1f2933;
+            --muted: #4a5568;
+            --card-bg: #ffffff;
+            --accent: #2563eb;
+            --accent-soft: #93c5fd;
+            --critical: #b91c1c;
+            --border: #d5d9e2;
+            --map-fill-default: #dbeafe;
+            --map-outline: #312e81;
+            --map-hover-outline: #38bdf8;
+            --map-marker: #0ea5e9;
+            --chart-indigo: #6366f1;
+            --chart-violet: #a855f7;
+            --chart-teal: #0ea5e9;
+            --chart-emerald: #10b981;
+            --chart-amber: #f59e0b;
+            --chart-rose: #f43f5e;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: "Inter", "Segoe UI", Arial, sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            line-height: 1.5;
+        }
+        header {
+            padding: 32px 40px 24px;
+            background: linear-gradient(135deg, #4338ca 0%, #2563eb 45%, #0ea5e9 100%);
+            color: #fff;
+        }
+        header h1 {
+            margin: 0 0 8px;
+            font-size: 32px;
+            font-weight: 600;
+        }
+        header p {
+            margin: 0;
+            max-width: 720px;
+            color: rgba(255,255,255,0.8);
+        }
+        main { padding: 32px 40px 48px; }
+        section { margin-bottom: 32px; }
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            align-items: center;
+            padding: 16px;
+            border-radius: 16px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
+        }
+        .toolbar form { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        select, button {
+            font-size: 15px;
+            padding: 10px 14px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: #fff;
+            color: var(--fg);
+        }
+        button {
+            background: var(--accent);
+            color: #fff;
+            border-color: transparent;
+            cursor: pointer;
+        }
+        button:hover { opacity: 0.9; }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(37, 99, 235, 0.12);
+            color: var(--accent);
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+        }
+        .card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 20px;
+            border: 1px solid var(--border);
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+        }
+        .card h3 {
+            margin: 0 0 8px;
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--muted);
+        }
+        .card strong { font-size: 24px; display: block; margin-bottom: 4px; }
+        #map,
+        #volunteer-map {
+            width: 100%;
+            height: 420px;
+            border-radius: 20px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+        .map-shell {
+            position: relative;
+        }
+        .legend {
+            margin-top: 16px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .legend span {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            background: var(--card-bg);
+        }
+        thead { background: #f1f5f9; }
+        th, td {
+            padding: 14px;
+            font-size: 14px;
+            border-bottom: 1px solid var(--border);
+            text-align: left;
+        }
+        tbody tr:last-child { border-bottom: none; }
+        .severity-chip {
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .severity-critical { background: rgba(220, 38, 38, 0.12); color: #b91c1c; }
+        .severity-elevated { background: rgba(217, 119, 6, 0.14); color: #b45309; }
+        .severity-guarded { background: rgba(59, 130, 246, 0.14); color: #1d4ed8; }
+        .severity-stable { background: rgba(34, 197, 94, 0.14); color: #15803d; }
+        .chart-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px;
+        }
+        .chart-card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 24px;
+            border: 1px solid var(--border);
+            box-shadow: 0 16px 36px rgba(15, 23, 42, 0.06);
+            height: 260px;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+        }
+        .chart-card::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            pointer-events: none;
+            opacity: 0.18;
+            transition: opacity 0.2s ease;
+        }
+        .chart-card:hover::after { opacity: 0.28; }
+        .chart-card h3 {
+            margin: 0 0 16px;
+            font-size: 17px;
+            font-weight: 600;
+            color: var(--muted);
+        }
+        .chart-card.tone-indigo { border-top: 4px solid var(--chart-indigo); }
+        .chart-card.tone-indigo::after { background: linear-gradient(135deg, rgba(99, 102, 241, 0.4), rgba(37, 99, 235, 0.1)); }
+        .chart-card.tone-teal { border-top: 4px solid var(--chart-teal); }
+        .chart-card.tone-teal::after { background: linear-gradient(135deg, rgba(14, 165, 233, 0.4), rgba(14, 165, 233, 0.1)); }
+        .chart-card.tone-amber { border-top: 4px solid var(--chart-amber); }
+        .chart-card.tone-amber::after { background: linear-gradient(135deg, rgba(245, 158, 11, 0.35), rgba(245, 158, 11, 0.08)); }
+        .chart-card.tone-rose { border-top: 4px solid var(--chart-rose); }
+        .chart-card.tone-rose::after { background: linear-gradient(135deg, rgba(244, 63, 94, 0.35), rgba(244, 63, 94, 0.08)); }
+        .chart-card.tone-emerald { border-top: 4px solid var(--chart-emerald); }
+        .chart-card.tone-emerald::after { background: linear-gradient(135deg, rgba(16, 185, 129, 0.35), rgba(16, 185, 129, 0.08)); }
+        .chart-card.is-wide { grid-column: span 2; }
+    .chart-card.is-tall { height: 320px; }
+    .chart-card canvas { flex: 1 1 auto; width: 100% !important; max-height: 100% !important; height: 100% !important; }
+        .table-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px;
+        }
+        .table-card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 0;
+            border: 1px solid var(--border);
+            box-shadow: 0 12px 24px rgba(15, 23, 42, 0.05);
+            overflow: hidden;
+            position: relative;
+        }
+        .table-card::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 0;
+            height: 4px;
+            background: var(--accent);
+        }
+        .table-card.tone-indigo::before { background: var(--chart-indigo); }
+        .table-card.tone-amber::before { background: var(--chart-amber); }
+        .table-card h3 {
+            margin: 0;
+            padding: 24px 20px 12px;
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--muted);
+        }
+        .list-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+        .list-card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 20px;
+            border: 1px solid var(--border);
+            box-shadow: 0 12px 24px rgba(15, 23, 42, 0.05);
+        }
+        .list-card ul {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            display: grid;
+            gap: 16px;
+        }
+        .list-card li {
+            font-size: 14px;
+            color: var(--fg);
+        }
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            margin-top: 6px;
+            margin-right: 6px;
+            border-radius: 999px;
+            background: rgba(37, 99, 235, 0.12);
+            color: var(--accent);
+        }
+        .metric-accent {
+            color: var(--accent);
+            font-weight: 600;
+        }
+        footer {
+            margin-top: 48px;
+            font-size: 13px;
+            color: var(--muted);
+        }
+        @media (max-width: 720px) {
+            header, main { padding: 24px; }
+            .toolbar { padding: 14px; }
+            .chart-card.is-wide { grid-column: span 1; }
+            .chart-card { height: 220px; }
+            .chart-card.is-tall { height: 260px; }
+        }
+    </style>
+</head>
+<body>
+<header>
+    <div class="badge">Food Security Intelligence</div>
+    <h1>Food Security Dashboard</h1>
+    <p>Realtime insights derived from seq2seq forecasts, community activity, and inspection data. Use the filters below to explore different projection years and refresh the underlying data when new model runs complete.</p>
+</header>
+<main>
+    <section class="toolbar">
+        <form method="get">
+            <label>
+                <span style="font-size:13px; font-weight:600; color:var(--muted);">Projection Year</span><br>
+                <select name="year" onchange="this.form.submit()">
+                    {% for year in available_years %}
+                        <option value="{{ year }}" {% if year == focus_year %}selected{% endif %}>{{ year }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <button type="submit" name="refresh" value="1">Force Refresh</button>
+        </form>
+        {% if dashboard.summary %}
+        <div style="flex:1; min-width:240px; color:var(--muted);">{{ dashboard.summary }}</div>
+        {% endif %}
+        <div style="margin-left:auto; text-align:right; min-width:180px;">
+            <div style="font-size:12px; color:var(--muted);">Last updated</div>
+            <strong style="font-size:14px;">{{ dashboard.updated_at_display|default:"—" }}</strong>
+        </div>
+    </section>
+
+    <section>
+        <h2 style="margin-bottom:12px;">Food Insecurity Heatmap</h2>
+        <div class="map-shell">
+            {% if mapbox_token %}
+                {% if map_payload.features or map_payload.choropleth.entries %}
+                    <div id="map"></div>
+                {% else %}
+                    <div style="padding:40px; border:1px dashed var(--border); border-radius:16px; background:#fff; text-align:center; color:var(--muted);">
+                        No district-level forecast data available for this selection.
+                    </div>
+                {% endif %}
+            {% else %}
+                <div style="padding:40px; border:1px dashed var(--border); border-radius:16px; background:#fff; text-align:center; color:var(--muted);">
+                    Mapbox access token not configured. Add <code>MAPBOX_ACCESS_TOKEN</code> to settings to render the map.
+                </div>
+            {% endif %}
+        </div>
+        {% if legend.labels %}
+        <div class="legend">
+            {% for key, label in legend.labels.items %}
+                <span class="severity-chip severity-{{ key }}">{{ label }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </section>
+
+    <section>
+        <h2 style="margin-bottom:12px;">Operations Snapshot</h2>
+        <div class="cards">
+            <div class="card">
+                <h3>Neighbors Onboarded</h3>
+                <strong>{{ dashboard.metrics.users.total|default:0 }}</strong>
+                <small>Total registered volunteers, donors, and families.</small>
+            </div>
+            <div class="card">
+                <h3>New This Week</h3>
+                <strong>{{ dashboard.metrics.users.new_last_7_days|default:0 }}</strong>
+                <small>Fresh sign-ups in the last seven days.</small>
+            </div>
+            <div class="card">
+                <h3>Meals Ready to Move</h3>
+                <strong>{{ dashboard.metrics.donations.live_quantity|default:0 }}</strong>
+                <small>Live donation units available across the network.</small>
+            </div>
+            <div class="card">
+                <h3>Predicted Drops</h3>
+                <strong>{{ dashboard.metrics.donations.predicted|default:0 }}</strong>
+                <small>Upcoming AI-predicted donation events.</small>
+            </div>
+            <div class="card">
+                <h3>Active Volunteers</h3>
+                <strong>{{ dashboard.metrics.volunteers.profiles|default:0 }}</strong>
+                <small>Verified volunteer profiles ready to run routes.</small>
+            </div>
+            <div class="card">
+                <h3>Active Claims</h3>
+                <strong>{{ dashboard.metrics.families.claims_active|default:0 }}</strong>
+                <small>Reservations currently across family households.</small>
+            </div>
+            <div class="card">
+                <h3>Fulfillment Rate</h3>
+                <strong>{{ dashboard.metrics.claims.conversion.fulfillment_rate|default:0|floatformat:1 }}%</strong>
+                <small>Collected vs. in-flight reservations.</small>
+            </div>
+            <div class="card">
+                <h3>Aid Programs Live</h3>
+                <strong>{{ dashboard.metrics.aid.programs|default:0 }}</strong>
+                <small>Community assistance programs currently available.</small>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2 style="margin-bottom:12px;">Impact & Inventory Trends</h2>
+        <div class="chart-grid">
+            <div class="chart-card">
+                <h3>Donation Status Mix</h3>
+                <canvas id="donation-status-chart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>Volunteer Task Pipeline</h3>
+                <canvas id="volunteer-task-chart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>14-Day Donation Velocity</h3>
+                <canvas id="donation-trend-chart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>Claims vs. Completed Routes</h3>
+                <canvas id="operations-trend-chart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>Inventory By Category</h3>
+                <canvas id="inventory-category-chart"></canvas>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2 style="margin-bottom:12px;">Volunteer Logistics Map</h2>
+        <div class="map-shell">
+            {% if mapbox_token %}
+                {% if volunteer_map.features %}
+                    <div id="volunteer-map"></div>
+                {% else %}
+                    <div style="padding:40px; border:1px dashed var(--border); border-radius:16px; background:#fff; text-align:center; color:var(--muted);">
+                        No volunteer task routes available for this window.
+                    </div>
+                {% endif %}
+            {% else %}
+                <div style="padding:40px; border:1px dashed var(--border); border-radius:16px; background:#fff; text-align:center; color:var(--muted);">
+                    Mapbox access token not configured. Add <code>MAPBOX_ACCESS_TOKEN</code> to settings to render the map.
+                </div>
+            {% endif %}
+        </div>
+    </section>
+
+    <section>
+        <h2 style="margin-bottom:12px;">Community Leaderboards</h2>
+        <div class="table-grid">
+            <div class="table-card">
+                <h3>Donor Volume</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Donor</th>
+                            <th>Donations</th>
+                            <th>Live</th>
+                            <th>Units</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for donor in dashboard.metrics.leaderboards.donors %}
+                        <tr>
+                            <td>{{ donor.name|default:donor.email }}</td>
+                            <td>{{ donor.donations|default:0 }}</td>
+                            <td>{{ donor.live|default:0 }}</td>
+                            <td>{{ donor.quantity|default:0 }}</td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="4" style="text-align:center; color:var(--muted); padding:24px;">No donor activity recorded yet.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="table-card">
+                <h3>Volunteer Route Heroes</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Volunteer</th>
+                            <th>Assigned</th>
+                            <th>Completed</th>
+                            <th>Miles</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for volunteer in dashboard.metrics.leaderboards.volunteers %}
+                        <tr>
+                            <td>{{ volunteer.name|default:volunteer.email }}</td>
+                            <td>{{ volunteer.assigned|default:0 }}</td>
+                            <td>{{ volunteer.completed|default:0 }}</td>
+                            <td>{{ volunteer.distance_miles|default:0 }}</td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="4" style="text-align:center; color:var(--muted); padding:24px;">No volunteer tasks logged yet.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2 style="margin-bottom:12px;">District Hotspots</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>District</th>
+                    <th>State</th>
+                    <th>Overall Rate</th>
+                    <th>Individuals</th>
+                    <th>Children</th>
+                    <th>Severity</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for hotspot in hotspots %}
+                <tr>
+                    <td>{{ hotspot.display_name|default:hotspot.district_id }}</td>
+                    <td>{{ hotspot.state|default:"—" }}</td>
+                    <td>{{ hotspot.overall_pct|default:"—" }}%</td>
+                    <td>{{ hotspot.estimated_food_insecure_individuals|default:"—" }}</td>
+                    <td>{{ hotspot.estimated_food_insecure_children|default:"—" }}</td>
+                    <td><span class="severity-chip severity-{{ hotspot.severity|default:'unknown' }}">{{ hotspot.severity|default:"unknown" }}</span></td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="6" style="text-align:center; color:var(--muted); padding:32px;">No hotspots available for this selection.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2 style="margin-bottom:12px;">Programs & Signals</h2>
+        <div class="list-grid">
+            <div class="list-card">
+                <h3>Aid Programs</h3>
+                <ul>
+                {% for program in dashboard.metrics.aid.recent_programs %}
+                    <li>
+                        <strong>{{ program.name }}</strong><br>
+                        {{ program.summary }}<br>
+                        {% if program.tags %}
+                            {% for tag in program.tags %}<span class="tag">{{ tag }}</span>{% endfor %}
+                        {% endif %}
+                    </li>
+                {% empty %}
+                    <li style="color:var(--muted);">No aid programs are configured yet.</li>
+                {% endfor %}
+                </ul>
+            </div>
+            <div class="list-card">
+                <h3>Upcoming Notifications</h3>
+                <ul>
+                {% for note in dashboard.metrics.notifications.recent %}
+                    <li>
+                        <strong>{{ note.message }}</strong><br>
+                        <span class="metric-accent">{{ note.scheduled_for|default:"Soon" }}</span> • {{ note.user }}
+                    </li>
+                {% empty %}
+                    <li style="color:var(--muted);">No notifications scheduled.</li>
+                {% endfor %}
+                </ul>
+            </div>
+            <div class="list-card">
+                <h3>Inspection Activity</h3>
+                <ul>
+                {% for item in dashboard.metrics.inspections.recent %}
+                    <li>
+                        <strong>{{ item.status|default:"pending"|title }}</strong><br>
+                        {{ item.summary|default:"Awaiting analysis." }}<br>
+                        <span class="metric-accent">{{ item.created|default:"—" }}</span>
+                    </li>
+                {% empty %}
+                    <li style="color:var(--muted);">No food inspections logged yet.</li>
+                {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        Data synthesized from seq2seq forecasts (<code>FoodInsecurityForecast</code>), donation activity, volunteer assignments, and inspection signals.
+    </footer>
+</main>
+
+{{ dashboard.metrics|json_script:"metrics-data" }}
+{{ dashboard.time_series|json_script:"time-series-data" }}
+{{ volunteer_map|json_script:"volunteer-map-data" }}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+<script>
+    (function() {
+        const metricsNode = document.getElementById('metrics-data');
+        if (!metricsNode || !window.Chart) { return; }
+        let metrics = {};
+        try {
+            metrics = JSON.parse(metricsNode.textContent || '{}');
+        } catch (_err) {
+            metrics = {};
+        }
+
+        const timeSeriesNode = document.getElementById('time-series-data');
+        let timeSeries = {};
+        if (timeSeriesNode) {
+            try {
+                timeSeries = JSON.parse(timeSeriesNode.textContent || '{}');
+            } catch (_err) {
+                timeSeries = {};
+            }
+        }
+
+        const palette = ['#1d4ed8', '#2563eb', '#38bdf8', '#14b8a6', '#f97316', '#facc15'];
+        const hasSeries = (series) => Boolean(series && Array.isArray(series.labels) && series.labels.length);
+        const getValues = (series) => Array.isArray(series.values) ? series.values.map((value) => value ?? 0) : [];
+
+        const donationStatus = metrics?.donations?.by_status || {};
+        const donationStatusLabels = Object.keys(donationStatus);
+        const donationStatusCanvas = document.getElementById('donation-status-chart');
+        if (donationStatusCanvas && donationStatusLabels.length) {
+            new Chart(donationStatusCanvas, {
+                type: 'bar',
+                data: {
+                    labels: donationStatusLabels,
+                    datasets: [
+                        {
+                            label: 'Donations by status',
+                            data: donationStatusLabels.map((key) => donationStatus[key] || 0),
+                            backgroundColor: donationStatusLabels.map((_, index) => palette[index % palette.length]),
+                            borderRadius: 6,
+                        },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: { precision: 0 },
+                        },
+                    },
+                    plugins: { legend: { display: false } },
+                },
+            });
+        }
+
+        const volunteerStatus = metrics?.volunteers?.tasks || {};
+        const volunteerLabels = Object.keys(volunteerStatus);
+        const volunteerCanvas = document.getElementById('volunteer-task-chart');
+        if (volunteerCanvas && volunteerLabels.length) {
+            new Chart(volunteerCanvas, {
+                type: 'bar',
+                data: {
+                    labels: volunteerLabels,
+                    datasets: [
+                        {
+                            label: 'Tasks by status',
+                            data: volunteerLabels.map((key) => volunteerStatus[key] || 0),
+                            backgroundColor: volunteerLabels.map((_, index) => palette[(index + 2) % palette.length]),
+                            borderRadius: 6,
+                        },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: { precision: 0 },
+                        },
+                    },
+                    plugins: { legend: { display: false } },
+                },
+            });
+        }
+
+        const donationTrend = timeSeries.donations_created;
+        const donationTrendCanvas = document.getElementById('donation-trend-chart');
+        if (donationTrendCanvas && hasSeries(donationTrend)) {
+            new Chart(donationTrendCanvas, {
+                type: 'line',
+                data: {
+                    labels: donationTrend.labels,
+                    datasets: [
+                        {
+                            label: 'Donations created',
+                            data: getValues(donationTrend),
+                            borderColor: '#2563eb',
+                            backgroundColor: 'rgba(37, 99, 235, 0.18)',
+                            fill: true,
+                            tension: 0.35,
+                        },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { precision: 0 } },
+                    },
+                },
+            });
+        }
+
+        const operationsCanvas = document.getElementById('operations-trend-chart');
+        const claimsSeries = timeSeries.claims_reserved;
+        const tasksSeries = timeSeries.tasks_completed;
+        const operationsLabels = hasSeries(claimsSeries) ? claimsSeries.labels : (hasSeries(tasksSeries) ? tasksSeries.labels : []);
+        if (operationsCanvas && operationsLabels.length) {
+            const claimsValues = hasSeries(claimsSeries) ? getValues(claimsSeries) : operationsLabels.map(() => 0);
+            const taskValues = hasSeries(tasksSeries) ? getValues(tasksSeries) : operationsLabels.map(() => 0);
+            new Chart(operationsCanvas, {
+                type: 'line',
+                data: {
+                    labels: operationsLabels,
+                    datasets: [
+                        {
+                            label: 'Claims reserved',
+                            data: claimsValues,
+                            borderColor: '#f97316',
+                            backgroundColor: 'rgba(249, 115, 22, 0.15)',
+                            fill: true,
+                            tension: 0.35,
+                        },
+                        {
+                            label: 'Tasks completed',
+                            data: taskValues,
+                            borderColor: '#14b8a6',
+                            backgroundColor: 'rgba(20, 184, 166, 0.15)',
+                            fill: true,
+                            tension: 0.35,
+                        },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { beginAtZero: true, ticks: { precision: 0 } },
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'bottom',
+                        },
+                    },
+                },
+            });
+        }
+
+        const inventoryData = metrics?.donations?.inventory_by_category || metrics?.inventory?.categories || [];
+        const inventoryCanvas = document.getElementById('inventory-category-chart');
+        if (inventoryCanvas && inventoryData.length) {
+            const labels = inventoryData.map((item) => item.category || 'Unknown');
+            const values = inventoryData.map((item) => item.total_quantity || 0);
+            new Chart(inventoryCanvas, {
+                type: 'doughnut',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            label: 'Units by category',
+                            data: values,
+                            backgroundColor: labels.map((_, index) => palette[index % palette.length]),
+                        },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                        },
+                    },
+                },
+            });
+        }
+    })();
+</script>
+
+
+{% if mapbox_token %}
+{{ mapbox_token|json_script:"mapbox-token" }}
+{{ map_payload|json_script:"map-payload" }}
+<script>
+    (function() {
+        const tokenNode = document.getElementById('mapbox-token');
+        const payloadNode = document.getElementById('map-payload');
+        if (!tokenNode || !payloadNode) { return; }
+        const token = JSON.parse(tokenNode.textContent || '""');
+        const payload = JSON.parse(payloadNode.textContent || '{}');
+        if (!token) { return; }
+
+        mapboxgl.accessToken = token;
+        const center = payload.center || { latitude: 37.7749, longitude: -122.4194, zoom: 3.4 };
+        const map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/light-v11',
+            center: [center.longitude, center.latitude],
+            zoom: center.zoom || 4.2,
+        });
+        map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+
+        const choropleth = payload.choropleth || {};
+        const entries = Array.isArray(choropleth.entries) ? choropleth.entries : [];
+        const defaultColor = choropleth.default_color || '#e5e7eb';
+        const geojsonUrl = choropleth.source || "{% static 'app/cd118.geojson' %}";
+
+        map.on('load', () => {
+            if (entries.length) {
+                const colorExpression = [
+                    'match',
+                    ['get', 'GEOID'],
+                ];
+                const entryLookup = {};
+                for (const entry of entries) {
+                    if (!entry.geoid) { continue; }
+                    const geoid = String(entry.geoid).padStart(4, '0');
+                    colorExpression.push(geoid, entry.color || '#94a3b8');
+                    entryLookup[geoid] = entry;
+                }
+                colorExpression.push(defaultColor);
+
+                map.addSource('us-congressional-districts', {
+                    type: 'geojson',
+                    data: geojsonUrl,
+                });
+
+                map.addLayer({
+                    id: 'district-choropleth',
+                    type: 'fill',
+                    source: 'us-congressional-districts',
+                    paint: {
+                        'fill-color': colorExpression,
+                        'fill-opacity': 0.72,
+                    },
+                });
+
+                map.addLayer({
+                    id: 'district-outline',
+                    type: 'line',
+                    source: 'us-congressional-districts',
+                    paint: {
+                        'line-color': '#ffffff',
+                        'line-width': 0.6,
+                        'line-opacity': 0.65,
+                    },
+                });
+
+                const popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false });
+                map.on('mousemove', 'district-choropleth', (event) => {
+                    const feature = event.features && event.features[0];
+                    if (!feature) { return; }
+                    const geoid = feature.properties && feature.properties.GEOID;
+                    const key = geoid == null ? null : String(geoid).padStart(4, '0');
+                    const entry = key ? entryLookup[key] : null;
+                    if (!entry) {
+                        popup.remove();
+                        return;
+                    }
+                    const html = `
+                        <strong>${entry.display_name || key}</strong><br>
+                        Overall: ${entry.overall_pct ?? '—'}%<br>
+                        Severity: ${entry.severity_label || 'unknown'}
+                    `;
+                    popup.setLngLat(event.lngLat).setHTML(html).addTo(map);
+                });
+                map.on('mouseleave', 'district-choropleth', () => {
+                    popup.remove();
+                });
+            }
+
+            const features = (payload.features || []).filter(
+                (item) => item.centroid_longitude && item.centroid_latitude
+            );
+            if (features.length) {
+                for (const feature of features) {
+                    const marker = new mapboxgl.Marker({ color: feature.severity_color || '#475569' });
+                    marker.setLngLat([
+                        Number(feature.centroid_longitude),
+                        Number(feature.centroid_latitude),
+                    ]);
+                    marker.setPopup(
+                        new mapboxgl.Popup({ offset: 12 }).setHTML(`
+                            <strong>${feature.display_name || feature.district_id}</strong><br>
+                            Overall: ${feature.overall_food_insecurity_pct ?? '—'}%<br>
+                            Children: ${feature.child_food_insecurity_pct ?? '—'}%<br>
+                            Severity: ${feature.severity_label || 'unknown'}
+                        `)
+                    );
+                    marker.addTo(map);
+                }
+            }
+        });
+    })();
+</script>
+<script>
+    (function() {
+        const tokenNode = document.getElementById('mapbox-token');
+        const volunteerNode = document.getElementById('volunteer-map-data');
+        if (!tokenNode || !volunteerNode) { return; }
+        const token = JSON.parse(tokenNode.textContent || '""');
+        if (!token) { return; }
+        const volunteerData = JSON.parse(volunteerNode.textContent || '{}') || {};
+        const container = document.getElementById('volunteer-map');
+        if (!container || !volunteerData.features || !volunteerData.features.length) { return; }
+
+        mapboxgl.accessToken = token;
+        const center = volunteerData.center || { latitude: 37.7749, longitude: -122.4194, zoom: 3.8 };
+        const vMap = new mapboxgl.Map({
+            container: 'volunteer-map',
+            style: 'mapbox://styles/mapbox/light-v11',
+            center: [center.longitude || -122.4194, center.latitude || 37.7749],
+            zoom: center.zoom || 10,
+        });
+        vMap.addControl(new mapboxgl.NavigationControl(), 'top-right');
+
+        const featureCollection = { type: 'FeatureCollection', features: [] };
+        for (const task of volunteerData.features) {
+            if (task.pickup && task.dropoff) {
+                featureCollection.features.push({
+                    type: 'Feature',
+                    geometry: {
+                        type: 'LineString',
+                        coordinates: [
+                            [task.pickup.longitude, task.pickup.latitude],
+                            [task.dropoff.longitude, task.dropoff.latitude],
+                        ],
+                    },
+                    properties: {
+                        title: task.title,
+                        status: task.status,
+                        urgency: task.urgency,
+                        load_size: task.load_size,
+                        distance_miles: task.distance_miles,
+                        estimated_minutes: task.estimated_minutes,
+                    },
+                });
+                featureCollection.features.push({
+                    type: 'Feature',
+                    geometry: { type: 'Point', coordinates: [task.pickup.longitude, task.pickup.latitude] },
+                    properties: {
+                        title: task.title,
+                        status: task.status,
+                        role: 'pickup',
+                        address: task.pickup.address,
+                    },
+                });
+                featureCollection.features.push({
+                    type: 'Feature',
+                    geometry: { type: 'Point', coordinates: [task.dropoff.longitude, task.dropoff.latitude] },
+                    properties: {
+                        title: task.title,
+                        status: task.status,
+                        role: 'dropoff',
+                        address: task.dropoff.address,
+                    },
+                });
+            }
+        }
+
+        vMap.on('load', () => {
+            vMap.addSource('volunteer-tasks', {
+                type: 'geojson',
+                data: featureCollection,
+            });
+
+            vMap.addLayer({
+                id: 'volunteer-task-lines',
+                type: 'line',
+                source: 'volunteer-tasks',
+                filter: ['==', ['geometry-type'], 'LineString'],
+                paint: {
+                    'line-color': ['match', ['get', 'status'], 'completed', '#16a34a', 'en_route', '#2563eb', 'delivering', '#2563eb', 'assigned', '#f59e0b', 'open', '#64748b', '#475569'],
+                    'line-width': 3,
+                    'line-opacity': 0.8,
+                },
+            });
+
+            vMap.addLayer({
+                id: 'volunteer-task-points',
+                type: 'circle',
+                source: 'volunteer-tasks',
+                filter: ['==', ['geometry-type'], 'Point'],
+                paint: {
+                    'circle-radius': 6,
+                    'circle-color': ['case', ['==', ['get', 'role'], 'pickup'], '#2563eb', '#f97316'],
+                    'circle-stroke-color': '#ffffff',
+                    'circle-stroke-width': 1.5,
+                },
+            });
+
+            const popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: true });
+            vMap.on('click', 'volunteer-task-points', (event) => {
+                const feature = event.features && event.features[0];
+                if (!feature) { return; }
+                const props = feature.properties || {};
+                popup
+                    .setLngLat(event.lngLat)
+                    .setHTML(`
+                        <strong>${props.title}</strong><br>
+                        ${props.role === 'pickup' ? 'Pickup' : 'Drop-off'}: ${props.address || '—'}<br>
+                        Status: ${props.status || 'unknown'}
+                    `)
+                    .addTo(vMap);
+            });
+
+            vMap.on('mouseenter', 'volunteer-task-points', () => {
+                vMap.getCanvas().style.cursor = 'pointer';
+            });
+            vMap.on('mouseleave', 'volunteer-task-points', () => {
+                vMap.getCanvas().style.cursor = '';
+            });
+        });
+    })();
+</script>
+{% endif %}
+</body>
+</html>
+

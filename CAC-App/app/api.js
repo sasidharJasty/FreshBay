@@ -135,6 +135,17 @@ export async function getFamiliesAid(token) {
   });
 }
 
+export async function searchAgritourism(token, queryString) {
+  const headers = token ? { Authorization: `Token ${token}` } : undefined;
+  const path = queryString
+    ? `/api/families/agritourism/search/?${queryString}`
+    : '/api/families/agritourism/search/';
+  return request(path, {
+    method: 'GET',
+    headers,
+  });
+}
+
 export async function getFamiliesProfile(token) {
   return request('/api/families/profile/', {
     method: 'GET',
@@ -342,6 +353,7 @@ export default {
   getFamiliesAvailable,
   getFamiliesClaims,
   getFamiliesAid,
+  searchAgritourism,
   getFamiliesProfile,
   reserveDonation,
   getDonorDashboard,
